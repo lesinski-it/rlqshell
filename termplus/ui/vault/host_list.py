@@ -152,6 +152,7 @@ class HostListWidget(QWidget):
 
     host_selected = Signal(int)
     host_connect_requested = Signal(int)
+    sftp_requested = Signal(int)  # host_id
 
     def __init__(self, host_manager: HostManager, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -265,6 +266,7 @@ class HostListWidget(QWidget):
     def _on_context_menu(self, host_id: int, pos) -> None:
         menu = QMenu(self)
         connect_action = menu.addAction("Connect")
+        sftp_action = menu.addAction("Open SFTP")
         menu.addSeparator()
         edit_action = menu.addAction("Edit")
         duplicate_action = menu.addAction("Duplicate")
@@ -274,6 +276,8 @@ class HostListWidget(QWidget):
         action = menu.exec(pos)
         if action == connect_action:
             self.host_connect_requested.emit(host_id)
+        elif action == sftp_action:
+            self.sftp_requested.emit(host_id)
         elif action == edit_action:
             self.host_selected.emit(host_id)
         elif action == duplicate_action:

@@ -139,6 +139,10 @@ class TerminalWidget(QWidget):
         self._bg_color = QColor("#1e1e2e")
         self._fg_color = QColor("#cdd6f4")
 
+        # Overlay (status messages like "Connecting...", errors)
+        self._overlay_text: str | None = None
+        self._overlay_color: QColor = QColor("#a6adc8")
+
         # Dirty tracking
         self._dirty = True
 
@@ -148,9 +152,25 @@ class TerminalWidget(QWidget):
 
     # --- Public API ---
 
+    def show_overlay(self, text: str, color: str | None = None) -> None:
+        """Show a centered status overlay on the terminal."""
+        self._overlay_text = text
+        if color:
+            self._overlay_color = QColor(color)
+        else:
+            self._overlay_color = QColor("#a6adc8")
+        self.update()
+
+    def clear_overlay(self) -> None:
+        """Remove the status overlay."""
+        if self._overlay_text is not None:
+            self._overlay_text = None
+            self.update()
+
     @Slot(bytes)
     def feed(self, data: bytes) -> None:
         """Feed raw terminal data from the connection."""
+        self.clear_overlay()
         try:
             text = data.decode("utf-8", errors="replace")
         except Exception:
@@ -257,6 +277,30 @@ class TerminalWidget(QWidget):
                 painter.setOpacity(0.7)
                 painter.drawRect(QRectF(cx, cy, cw, ch))
                 painter.setOpacity(1.0)
+
+            # Draw overlay (status messages)
+            if self._overlay_text:
+                overlay_font = QFont(self._font)
+                overlay_font.setPointSize(14)
+                painter.setFont(overlay_font)
+                fm = QFontMetricsF(overlay_font)
+                text_width = fm.horizontalAdvance(self._overlay_text)
+                text_height = fm.height()
+                pad_x, pad_y = 24, 12
+                rx = (self.width() - text_width) / 2 - pad_x
+                ry = (self.height() - text_height) / 2 - pad_y
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.setBrush(QColor(30, 30, 46, 200))
+                painter.drawRoundedRect(
+                    QRectF(rx, ry, text_width + pad_x * 2, text_height + pad_y * 2),
+                    8, 8,
+                )
+                painter.setPen(self._overlay_color)
+                painter.drawText(
+                    QRectF(0, 0, self.width(), self.height()),
+                    Qt.AlignmentFlag.AlignCenter,
+                    self._overlay_text,
+                )
         finally:
             painter.end()
 

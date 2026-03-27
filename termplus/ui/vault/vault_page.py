@@ -14,14 +14,21 @@ from PySide6.QtWidgets import (
 )
 
 from termplus.app.constants import Colors
+from termplus.core.credential_store import CredentialStore
 from termplus.core.host_manager import HostManager
 from termplus.core.keychain import Keychain
 from termplus.core.known_hosts import KnownHostsManager
+from termplus.core.history_manager import HistoryManager
+from termplus.core.port_forward_manager import PortForwardManager
+from termplus.core.snippet_manager import SnippetManager
+from termplus.ui.vault.history_view import HistoryView
 from termplus.ui.vault.host_editor import HostEditorContent
 from termplus.ui.vault.host_list import HostListWidget
 from termplus.ui.vault.keychain_view import KeychainView
 from termplus.ui.vault.known_hosts_view import KnownHostsView
+from termplus.ui.vault.port_forward_view import PortForwardView
 from termplus.ui.vault.sidebar import Sidebar
+from termplus.ui.vault.snippet_list import SnippetListView
 from termplus.ui.widgets.slide_panel import SlidePanel
 
 logger = logging.getLogger(__name__)
@@ -45,18 +52,27 @@ class VaultPage(QWidget):
     """Main vault page: sidebar + content area + slide-in host editor."""
 
     connect_requested = Signal(int)  # host_id
+    sftp_requested = Signal(int)  # host_id
 
     def __init__(
         self,
         host_manager: HostManager,
+        credential_store: CredentialStore | None = None,
         keychain: Keychain | None = None,
         known_hosts: KnownHostsManager | None = None,
+        snippet_manager: SnippetManager | None = None,
+        history_manager: HistoryManager | None = None,
+        pf_manager: PortForwardManager | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self._host_manager = host_manager
+        self._credential_store = credential_store
         self._keychain = keychain
         self._known_hosts = known_hosts
+        self._snippet_manager = snippet_manager
+        self._history_manager = history_manager
+        self._pf_manager = pf_manager
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -75,10 +91,14 @@ class VaultPage(QWidget):
         self._host_list = HostListWidget(host_manager)
         self._host_list.host_selected.connect(self._on_host_selected)
         self._host_list.host_connect_requested.connect(self._on_host_connect)
+        self._host_list.sftp_requested.connect(self._on_sftp_requested)
         self._content_stack.addWidget(self._host_list)
 
-        # Snippets placeholder
-        self._snippets_section = _PlaceholderSection("Snippets")
+        # Snippets
+        if snippet_manager is not None:
+            self._snippets_section: QWidget = SnippetListView(snippet_manager)
+        else:
+            self._snippets_section = _PlaceholderSection("Snippets")
         self._content_stack.addWidget(self._snippets_section)
 
         # Keychain view (real widget if keychain provided)
@@ -94,8 +114,15 @@ class VaultPage(QWidget):
         else:
             self._known_hosts_section = _PlaceholderSection("Known Hosts")
 
-        self._port_fwd_section = _PlaceholderSection("Port Forwarding")
-        self._history_section = _PlaceholderSection("History")
+        if pf_manager is not None:
+            self._port_fwd_section: QWidget = PortForwardView(pf_manager, host_manager)
+        else:
+            self._port_fwd_section = _PlaceholderSection("Port Forwarding")
+
+        if history_manager is not None:
+            self._history_section: QWidget = HistoryView(history_manager)
+        else:
+            self._history_section = _PlaceholderSection("History")
 
         self._content_stack.addWidget(self._known_hosts_section)
         self._content_stack.addWidget(self._port_fwd_section)
@@ -110,13 +137,16 @@ class VaultPage(QWidget):
             "history": 5,
         }
 
-        # Host editor (slide-in panel)
+        # Host editor (slide-in panel — added to layout so it appears on the right)
         self._editor_panel = SlidePanel(self, width=420)
-        self._editor_content = HostEditorContent(host_manager)
+        self._editor_content = HostEditorContent(
+            host_manager, credential_store=credential_store, keychain=keychain,
+        )
         self._editor_content.host_saved.connect(self._host_list.refresh)
         self._editor_content.host_deleted.connect(self._on_host_deleted)
         self._editor_content.connect_requested.connect(self._on_host_connect)
         self._editor_panel.set_content(self._editor_content)
+        layout.addWidget(self._editor_panel)
 
     def _on_section_changed(self, section: str) -> None:
         idx = self._section_map.get(section, 0)
@@ -133,14 +163,10 @@ class VaultPage(QWidget):
     def _on_host_connect(self, host_id: int) -> None:
         self.connect_requested.emit(host_id)
 
+    def _on_sftp_requested(self, host_id: int) -> None:
+        self.sftp_requested.emit(host_id)
+
     def _on_host_deleted(self) -> None:
         self._editor_panel.close()
         self._host_list.refresh()
 
-    def resizeEvent(self, event) -> None:
-        """Keep the slide panel anchored to the right edge."""
-        super().resizeEvent(event)
-        self._editor_panel.setFixedHeight(self.height())
-        self._editor_panel.move(
-            self.width() - self._editor_panel.width(), 0
-        )

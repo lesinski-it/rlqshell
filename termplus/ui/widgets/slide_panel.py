@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import QEasingCurve, QPropertyAnimation, Qt
+from PySide6.QtCore import Property, QEasingCurve, QPropertyAnimation, Qt
 from PySide6.QtWidgets import QFrame, QVBoxLayout, QWidget
 
 from termplus.app.constants import Colors
@@ -27,6 +27,7 @@ class SlidePanel(QFrame):
         self._is_open = False
 
         self.setFixedWidth(0)
+        self.hide()
         self.setStyleSheet(
             f"SlidePanel {{ "
             f"  background-color: {Colors.BG_SURFACE}; "
@@ -37,10 +38,22 @@ class SlidePanel(QFrame):
         self._layout = QVBoxLayout(self)
         self._layout.setContentsMargins(0, 0, 0, 0)
 
-        # Width animation
-        self._animation = QPropertyAnimation(self, b"fixedWidth")
+        # Width animation — uses the registered panelWidth Property
+        self._animation = QPropertyAnimation(self, b"panelWidth")
         self._animation.setDuration(250)
         self._animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+
+    # --- Qt Property for animation ---
+
+    def _get_panel_width(self) -> int:
+        return self.maximumWidth()
+
+    def _set_panel_width(self, width: int) -> None:
+        self.setFixedWidth(max(0, width))
+
+    panelWidth = Property(int, _get_panel_width, _set_panel_width)
+
+    # --- Public API ---
 
     @property
     def is_open(self) -> bool:
@@ -60,11 +73,11 @@ class SlidePanel(QFrame):
         if self._is_open:
             return
         self._is_open = True
+        self.show()
         self._animation.stop()
-        self._animation.setStartValue(self.width())
+        self._animation.setStartValue(self.maximumWidth())
         self._animation.setEndValue(self._panel_width)
         self._animation.start()
-        self.show()
 
     def close(self) -> None:
         """Slide the panel closed."""
@@ -72,7 +85,7 @@ class SlidePanel(QFrame):
             return
         self._is_open = False
         self._animation.stop()
-        self._animation.setStartValue(self.width())
+        self._animation.setStartValue(self.maximumWidth())
         self._animation.setEndValue(0)
         self._animation.finished.connect(self._on_close_finished)
         self._animation.start()
@@ -87,7 +100,3 @@ class SlidePanel(QFrame):
     def _on_close_finished(self) -> None:
         self._animation.finished.disconnect(self._on_close_finished)
         self.hide()
-
-    # QPropertyAnimation needs this to animate fixedWidth
-    def setFixedWidth(self, width: int) -> None:
-        super().setFixedWidth(width)

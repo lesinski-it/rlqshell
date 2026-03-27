@@ -71,7 +71,7 @@ class TerminalSettings(QWidget):
 
         # Cursor blink
         self._cursor_blink = ToggleSwitch()
-        self._cursor_blink.setChecked(config.get("terminal.cursor_blink", True))
+        self._cursor_blink.set_checked(config.get("terminal.cursor_blink", True))
         self._cursor_blink.toggled.connect(
             lambda v: self._save("terminal.cursor_blink", v)
         )

@@ -106,7 +106,16 @@ class MainWindow(QMainWindow):
     def _on_settings_requested(self) -> None:
         logger.info("Settings requested — dialog coming in Stage 8")
 
+    def set_cleanup_callback(self, callback) -> None:
+        """Register a callback to run on window close for resource cleanup."""
+        self._cleanup_callback = callback
+
     def closeEvent(self, event) -> None:
-        """Handle window close."""
+        """Handle window close — run cleanup callback if set."""
         logger.info("MainWindow closing")
+        if hasattr(self, "_cleanup_callback") and self._cleanup_callback:
+            try:
+                self._cleanup_callback()
+            except Exception:
+                logger.exception("Error during cleanup")
         event.accept()

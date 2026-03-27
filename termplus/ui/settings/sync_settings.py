@@ -73,7 +73,7 @@ class SyncSettings(QWidget):
 
         # Auto-sync toggle
         self._auto_sync = ToggleSwitch()
-        self._auto_sync.setChecked(config.get("sync.auto_sync", False))
+        self._auto_sync.set_checked(config.get("sync.auto_sync", False))
         self._auto_sync.toggled.connect(lambda v: self._save("sync.auto_sync", v))
         form.addRow(self._make_label("Auto Sync"), self._auto_sync)
 

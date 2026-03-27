@@ -39,7 +39,9 @@ def main() -> None:
     from termplus.core.credential_store import CredentialStore
     from termplus.core.database import Database
     from termplus.core.keychain import Keychain
+    from termplus.core.history_manager import HistoryManager
     from termplus.core.known_hosts import KnownHostsManager
+    from termplus.core.port_forward_manager import PortForwardManager
     from termplus.core.sync.conflict_resolver import ConflictResolver
     from termplus.core.sync.sync_engine import SyncEngine
     from termplus.core.sync.sync_state import SyncState
@@ -48,6 +50,7 @@ def main() -> None:
     from termplus.ui.connections.connections_page import ConnectionsPage
     from termplus.ui.settings.settings_dialog import SettingsDialog
     from termplus.ui.sftp.sftp_page import SFTPPage
+    from termplus.ui.top_bar import TopBar
     from termplus.ui.vault.vault_page import VaultPage
 
     db = Database(app.config.db_path)
@@ -55,8 +58,18 @@ def main() -> None:
     vault.initialize()
 
     credential_store = CredentialStore(db, app.config.vault_key_path)
+
+    # Master password dialog — unlock or set new password
+    from termplus.ui.dialogs.master_password_dialog import MasterPasswordDialog
+
+    mp_dialog = MasterPasswordDialog(credential_store)
+    if mp_dialog.exec() != MasterPasswordDialog.DialogCode.Accepted:
+        logger.info("Master password skipped")
+
     keychain = Keychain(db, credential_store)
     known_hosts_mgr = KnownHostsManager(db)
+    history_mgr = HistoryManager(db)
+    pf_mgr = PortForwardManager(db)
     connection_pool = ConnectionPool()
 
     # Cloud sync
@@ -69,18 +82,35 @@ def main() -> None:
 
     # Install real Vault page
     vault_page = VaultPage(
-        vault.hosts, keychain=keychain, known_hosts=known_hosts_mgr,
+        vault.hosts,
+        credential_store=credential_store,
+        keychain=keychain,
+        known_hosts=known_hosts_mgr,
+        snippet_manager=vault.snippets,
+        history_manager=history_mgr,
+        pf_manager=pf_mgr,
     )
     window.set_vault_page(vault_page)
 
     # Install Connections page
     connections_page = ConnectionsPage(
         vault.hosts, credential_store, keychain, connection_pool,
+        known_hosts=known_hosts_mgr, history_manager=history_mgr,
     )
     window.set_connections_page(connections_page)
 
-    # Wire Vault → Connections
-    vault_page.connect_requested.connect(connections_page.open_connection)
+    # Wire Vault → Connections / SFTP
+    def _on_connect_requested(host_id: int) -> None:
+        connections_page.open_connection(host_id)
+        window.top_bar.navigate_to(TopBar.PAGE_CONNECTIONS)
+
+    vault_page.connect_requested.connect(_on_connect_requested)
+
+    def _open_sftp_from_vault(host_id: int) -> None:
+        sftp_page.open_sftp_session(host_id)
+        window.top_bar.navigate_to(TopBar.PAGE_SFTP)
+
+    vault_page.sftp_requested.connect(_open_sftp_from_vault)
 
     # Install SFTP page
     sftp_page = SFTPPage(
@@ -112,7 +142,7 @@ def main() -> None:
         items.append(PaletteItem(
             title="New Host", category="Action",
             action=lambda: (
-                window.top_bar._on_nav_click(0),
+                window.top_bar.navigate_to(TopBar.PAGE_VAULT),
                 vault_page._host_list._on_new_host(),
             ),
         ))
@@ -133,12 +163,37 @@ def main() -> None:
         lambda: SettingsDialog(app.config, window, sync_engine=sync_engine).exec()
     )
 
+    # Keyboard shortcuts: Ctrl+W close tab, Ctrl+Tab/Ctrl+Shift+Tab switch tabs
+    sc_close_tab = QShortcut(QKeySequence("Ctrl+W"), window)
+    sc_close_tab.activated.connect(connections_page.close_current_tab)
+
+    sc_next_tab = QShortcut(QKeySequence("Ctrl+Tab"), window)
+    sc_next_tab.activated.connect(connections_page.next_tab)
+
+    sc_prev_tab = QShortcut(QKeySequence("Ctrl+Shift+Tab"), window)
+    sc_prev_tab.activated.connect(connections_page.prev_tab)
+
+    # F11 fullscreen toggle
+    sc_fullscreen = QShortcut(QKeySequence("F11"), window)
+    sc_fullscreen.activated.connect(
+        lambda: window.showNormal() if window.isFullScreen() else window.showFullScreen()
+    )
+
     # Wire settings button in top bar
     window.top_bar.settings_requested.disconnect()
     window.top_bar.settings_requested.connect(
         lambda: SettingsDialog(app.config, window, sync_engine=sync_engine).exec()
     )
 
+    # Cleanup on close
+    def _cleanup() -> None:
+        logger.info("Cleaning up resources…")
+        connection_pool.close_all()
+        sync_engine.stop_auto_sync()
+        credential_store.lock()
+        vault.close()
+
+    window.set_cleanup_callback(_cleanup)
     window.show()
 
     with loop:

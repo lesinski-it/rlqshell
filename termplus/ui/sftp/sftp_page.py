@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import getpass
 import logging
 import uuid
 
@@ -155,9 +156,9 @@ class SFTPPage(QWidget):
     def _resolve_username(self, host: Host) -> str:
         if host.ssh_identity_id and self._credential_store.is_unlocked:
             identity = self._credential_store.get_identity(host.ssh_identity_id)
-            if identity:
+            if identity and identity.username:
                 return identity.username
-        return ""
+        return getpass.getuser()
 
     def _find_existing_connection(self, host: Host) -> SSHConnection | None:
         """Look for a reusable SSH connection in the pool."""

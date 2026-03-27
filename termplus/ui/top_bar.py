@@ -91,11 +91,15 @@ class TopBar(QWidget):
         btn.clicked.connect(lambda checked=False, i=index: self._on_nav_click(i))
         return btn
 
+    def navigate_to(self, index: int) -> None:
+        """Programmatically switch to the given page index."""
+        self._current_index = index
+        self._update_button_styles()
+        self.page_changed.emit(index)
+
     def _on_nav_click(self, index: int) -> None:
         if index != self._current_index:
-            self._current_index = index
-            self._update_button_styles()
-            self.page_changed.emit(index)
+            self.navigate_to(index)
 
     def _update_button_styles(self) -> None:
         for i, btn in enumerate(self._nav_buttons):

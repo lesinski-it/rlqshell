@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import hashlib
 import logging
 import threading
+from typing import Callable
 
 import paramiko
 
@@ -14,6 +17,44 @@ logger = logging.getLogger(__name__)
 
 # Read buffer size
 _BUFSIZE = 65536
+
+
+class HostKeyVerifyCallback:
+    """Thread-safe callback for host key verification.
+
+    The SSH connection is established in a background thread, but the UI dialog
+    must run on the main thread. This class bridges the two using a threading
+    Event to block the background thread while the main thread decides.
+    """
+
+    def __init__(self, verify_fn: Callable[[str, int, str, str], bool] | None = None):
+        self._verify_fn = verify_fn
+
+    def verify(self, hostname: str, port: int, key_type: str, fingerprint: str) -> bool:
+        if self._verify_fn is None:
+            return True  # auto-accept if no callback
+        return self._verify_fn(hostname, port, key_type, fingerprint)
+
+
+class _InteractiveHostKeyPolicy(paramiko.MissingHostKeyPolicy):
+    """Custom paramiko policy that delegates verification to a callback."""
+
+    def __init__(self, callback: HostKeyVerifyCallback, hostname: str, port: int):
+        self._callback = callback
+        self._hostname = hostname
+        self._port = port
+
+    def missing_host_key(self, client, hostname, key):
+        key_type = key.get_name()
+        raw = key.asbytes()
+        fingerprint = "SHA256:" + base64.b64encode(
+            hashlib.sha256(raw).digest()
+        ).rstrip(b"=").decode("ascii")
+
+        if not self._callback.verify(self._hostname, self._port, key_type, fingerprint):
+            raise paramiko.SSHException(
+                f"Host key verification rejected for {self._hostname}:{self._port}"
+            )
 
 
 class SSHConnection(AbstractConnection):
@@ -32,6 +73,7 @@ class SSHConnection(AbstractConnection):
         compression: bool = False,
         cols: int = 80,
         rows: int = 24,
+        host_key_callback: HostKeyVerifyCallback | None = None,
     ) -> None:
         super().__init__()
         self._hostname = hostname
@@ -45,6 +87,7 @@ class SSHConnection(AbstractConnection):
         self._compression = compression
         self._cols = cols
         self._rows = rows
+        self._host_key_callback = host_key_callback
 
         self._client: paramiko.SSHClient | None = None
         self._channel: paramiko.Channel | None = None
@@ -76,7 +119,13 @@ class SSHConnection(AbstractConnection):
     def _do_connect(self) -> None:
         """Blocking connect (runs in thread pool)."""
         client = paramiko.SSHClient()
-        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        if self._host_key_callback:
+            policy = _InteractiveHostKeyPolicy(
+                self._host_key_callback, self._hostname, self._port,
+            )
+            client.set_missing_host_key_policy(policy)
+        else:
+            client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
 
         connect_kwargs: dict = {
             "hostname": self._hostname,

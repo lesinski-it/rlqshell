@@ -20,7 +20,9 @@ from PySide6.QtWidgets import (
 )
 
 from termplus.app.constants import Colors
+from termplus.core.credential_store import CredentialStore
 from termplus.core.host_manager import HostManager
+from termplus.core.keychain import Keychain
 from termplus.core.models.host import Host
 
 logger = logging.getLogger(__name__)
@@ -33,9 +35,17 @@ class HostEditorContent(QWidget):
     host_deleted = Signal()
     connect_requested = Signal(int)  # host_id
 
-    def __init__(self, host_manager: HostManager, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        host_manager: HostManager,
+        credential_store: CredentialStore | None = None,
+        keychain: Keychain | None = None,
+        parent: QWidget | None = None,
+    ) -> None:
         super().__init__(parent)
         self._host_manager = host_manager
+        self._credential_store = credential_store
+        self._keychain = keychain
         self._host: Host | None = None
         self._auto_save_timer = QTimer()
         self._auto_save_timer.setSingleShot(True)
@@ -88,10 +98,10 @@ class HostEditorContent(QWidget):
         self._port_spin.setValue(22)
         self._add_field("Port", self._port_spin)
 
-        # Identity (placeholder — full picker in Stage 5)
+        # Identity
         self._identity_combo = QComboBox()
-        self._identity_combo.addItem("None")
-        self._identity_combo.addItem("+ Create new…")
+        self._populate_identities()
+        self._identity_combo.currentIndexChanged.connect(self._on_identity_changed)
         self._add_field("Identity", self._identity_combo)
 
         # Group
@@ -212,6 +222,15 @@ class HostEditorContent(QWidget):
         self._compression_check.setChecked(host.ssh_compression)
         self._notes_edit.setPlainText(host.notes or "")
 
+        # Load identities
+        self._identity_combo.blockSignals(True)
+        self._populate_identities()
+        if host.ssh_identity_id:
+            idx = self._identity_combo.findData(host.ssh_identity_id)
+            if idx >= 0:
+                self._identity_combo.setCurrentIndex(idx)
+        self._identity_combo.blockSignals(False)
+
         # Load groups
         self._group_combo.clear()
         self._group_combo.addItem("No group", None)
@@ -232,6 +251,37 @@ class HostEditorContent(QWidget):
         self._group_combo.blockSignals(False)
 
         self._save_indicator.setText("")
+
+    def _populate_identities(self) -> None:
+        """Fill the identity dropdown from CredentialStore."""
+        self._identity_combo.clear()
+        self._identity_combo.addItem("— None —", None)
+        if self._credential_store:
+            for ident in self._credential_store.list_identities():
+                display = f"{ident.label} ({ident.username})"
+                self._identity_combo.addItem(display, ident.id)
+        self._identity_combo.addItem("+ Create new…", "__new__")
+
+    def _on_identity_changed(self) -> None:
+        data = self._identity_combo.currentData()
+        if data == "__new__":
+            self._open_identity_editor()
+        elif self._host is not None:
+            self._host.ssh_identity_id = data
+            self._schedule_save()
+
+    def _open_identity_editor(self) -> None:
+        if not self._credential_store or not self._keychain:
+            self._identity_combo.setCurrentIndex(0)
+            return
+        from termplus.ui.vault.identity_editor import IdentityEditor
+        editor = IdentityEditor(self._credential_store, self._keychain, self)
+        if editor.exec() == IdentityEditor.DialogCode.Accepted:
+            self._populate_identities()
+            # Select the newly created identity (last before "+ Create new…")
+            self._identity_combo.setCurrentIndex(self._identity_combo.count() - 2)
+        else:
+            self._identity_combo.setCurrentIndex(0)
 
     def _add_field(self, label: str, widget: QWidget) -> QWidget:
         lbl = QLabel(label)
@@ -262,6 +312,8 @@ class HostEditorContent(QWidget):
         self._host.ssh_compression = self._compression_check.isChecked()
         self._host.notes = self._notes_edit.toPlainText() or None
         self._host.group_id = self._group_combo.currentData()
+        identity_data = self._identity_combo.currentData()
+        self._host.ssh_identity_id = identity_data if identity_data != "__new__" else None
 
         self._host_manager.update_host(self._host)
         self._save_indicator.setText("Saved")
