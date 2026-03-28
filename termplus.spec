@@ -48,12 +48,22 @@ for pkg in [
     'aardwolf',
     'asyauth',
     'asysocks',
-    'unicrypto',
     'minikerberos',
     'PIL',
     'Cryptodome',
 ]:
     hiddenimports += collect_submodules(pkg)
+
+# unicrypto has a circular import in pycryptodomex backend that breaks
+# collect_submodules — collect other backends normally, add pycryptodomex manually
+hiddenimports += collect_submodules('unicrypto')
+hiddenimports += [
+    'unicrypto.backends.pycryptodomex',
+    'unicrypto.backends.pycryptodomex.AES',
+    'unicrypto.backends.pycryptodomex.DES',
+    'unicrypto.backends.pycryptodomex.RC4',
+    'unicrypto.backends.pycryptodomex.TDES',
+]
 
 # Data files (e.g. aardwolf may have data files)
 extra_datas = []
