@@ -80,11 +80,11 @@ class HostEditorContent(QWidget):
         self._form_layout.addLayout(header_row)
 
         # Label
-        self._label_edit = self._add_field("Label", QLineEdit())
+        _, self._label_edit = self._add_field("Label", QLineEdit())
         self._label_edit.setPlaceholderText("e.g. web-server-1")
 
         # Address
-        self._address_edit = self._add_field("Address", QLineEdit())
+        _, self._address_edit = self._add_field("Address", QLineEdit())
         self._address_edit.setPlaceholderText("IP or hostname")
 
         # Protocol
@@ -116,19 +116,19 @@ class HostEditorContent(QWidget):
         self._add_field("Group", self._group_combo)
 
         # SSH options section
-        ssh_header = QLabel("SSH Options")
-        ssh_header.setStyleSheet(
+        self._ssh_header = QLabel("SSH Options")
+        self._ssh_header.setStyleSheet(
             f"font-size: 14px; font-weight: 600; color: {Colors.TEXT_PRIMARY}; "
             f"background: transparent; padding-top: 8px;"
         )
-        self._form_layout.addWidget(ssh_header)
+        self._form_layout.addWidget(self._ssh_header)
 
         # Keep Alive
         self._keep_alive_spin = QSpinBox()
         self._keep_alive_spin.setRange(0, 3600)
         self._keep_alive_spin.setValue(60)
         self._keep_alive_spin.setSuffix(" sec")
-        self._add_field("Keep Alive", self._keep_alive_spin)
+        self._keep_alive_lbl, _ = self._add_field("Keep Alive", self._keep_alive_spin)
 
         # Agent Forwarding
         self._agent_fwd_check = QCheckBox("Enable SSH Agent Forwarding")
@@ -137,6 +137,62 @@ class HostEditorContent(QWidget):
         # Compression
         self._compression_check = QCheckBox("Enable Compression")
         self._form_layout.addWidget(self._compression_check)
+
+        # Collect SSH widgets for visibility toggling
+        self._ssh_widgets: list[QWidget] = [
+            self._ssh_header, self._keep_alive_lbl, self._keep_alive_spin,
+            self._agent_fwd_check, self._compression_check,
+        ]
+
+        # RDP options section
+        self._rdp_header = QLabel("RDP Options")
+        self._rdp_header.setStyleSheet(
+            f"font-size: 14px; font-weight: 600; color: {Colors.TEXT_PRIMARY}; "
+            f"background: transparent; padding-top: 8px;"
+        )
+        self._form_layout.addWidget(self._rdp_header)
+
+        # RDP Username
+        self._rdp_username_edit = QLineEdit()
+        self._rdp_username_edit.setPlaceholderText("RDP username (or use Identity)")
+        self._rdp_username_lbl, _ = self._add_field("RDP Username", self._rdp_username_edit)
+
+        # RDP Domain
+        self._rdp_domain_edit = QLineEdit()
+        self._rdp_domain_edit.setPlaceholderText("e.g. CORP")
+        self._rdp_domain_lbl, _ = self._add_field("Domain", self._rdp_domain_edit)
+
+        # Resolution
+        self._rdp_resolution_combo = QComboBox()
+        self._rdp_resolution_combo.addItems([
+            "1920x1080", "1680x1050", "1440x900", "1366x768",
+            "1280x1024", "1280x720", "1024x768", "dynamic",
+        ])
+        self._rdp_resolution_lbl, _ = self._add_field("Resolution", self._rdp_resolution_combo)
+
+        # Color depth
+        self._rdp_color_depth_combo = QComboBox()
+        self._rdp_color_depth_combo.addItems(["32", "24", "16", "15"])
+        self._rdp_color_depth_lbl, _ = self._add_field("Color Depth", self._rdp_color_depth_combo)
+
+        # Audio
+        self._rdp_audio_check = QCheckBox("Enable Audio Redirection")
+        self._form_layout.addWidget(self._rdp_audio_check)
+
+        # Clipboard
+        self._rdp_clipboard_check = QCheckBox("Enable Clipboard Sharing")
+        self._rdp_clipboard_check.setChecked(True)
+        self._form_layout.addWidget(self._rdp_clipboard_check)
+
+        # Collect RDP widgets for visibility toggling
+        self._rdp_widgets: list[QWidget] = [
+            self._rdp_header,
+            self._rdp_username_lbl, self._rdp_username_edit,
+            self._rdp_domain_lbl, self._rdp_domain_edit,
+            self._rdp_resolution_lbl, self._rdp_resolution_combo,
+            self._rdp_color_depth_lbl, self._rdp_color_depth_combo,
+            self._rdp_audio_check, self._rdp_clipboard_check,
+        ]
 
         # Notes
         self._notes_edit = QTextEdit()
@@ -200,6 +256,15 @@ class HostEditorContent(QWidget):
         self._compression_check.stateChanged.connect(self._schedule_save)
         self._notes_edit.textChanged.connect(self._schedule_save)
         self._group_combo.currentIndexChanged.connect(self._schedule_save)
+        self._rdp_username_edit.textChanged.connect(self._schedule_save)
+        self._rdp_domain_edit.textChanged.connect(self._schedule_save)
+        self._rdp_resolution_combo.currentIndexChanged.connect(self._schedule_save)
+        self._rdp_color_depth_combo.currentIndexChanged.connect(self._schedule_save)
+        self._rdp_audio_check.stateChanged.connect(self._schedule_save)
+        self._rdp_clipboard_check.stateChanged.connect(self._schedule_save)
+
+        # Show correct protocol section initially
+        self._update_protocol_sections("ssh")
 
     def load_host(self, host_id: int) -> None:
         """Load a host into the editor."""
@@ -210,12 +275,16 @@ class HostEditorContent(QWidget):
 
         # Block signals during load
         for w in [self._label_edit, self._address_edit, self._port_spin,
-                   self._keep_alive_spin, self._notes_edit]:
+                   self._keep_alive_spin, self._notes_edit,
+                   self._rdp_username_edit, self._rdp_domain_edit]:
             w.blockSignals(True)
-        self._protocol_combo.blockSignals(True)
+        for w in [self._protocol_combo, self._group_combo,
+                  self._rdp_resolution_combo, self._rdp_color_depth_combo]:
+            w.blockSignals(True)
         self._agent_fwd_check.blockSignals(True)
         self._compression_check.blockSignals(True)
-        self._group_combo.blockSignals(True)
+        self._rdp_audio_check.blockSignals(True)
+        self._rdp_clipboard_check.blockSignals(True)
 
         self._label_edit.setText(host.label)
         self._address_edit.setText(host.address)
@@ -225,6 +294,18 @@ class HostEditorContent(QWidget):
         self._agent_fwd_check.setChecked(host.ssh_agent_forwarding)
         self._compression_check.setChecked(host.ssh_compression)
         self._notes_edit.setPlainText(host.notes or "")
+
+        # RDP fields
+        self._rdp_username_edit.setText(host.rdp_username or "")
+        self._rdp_domain_edit.setText(host.rdp_domain or "")
+        idx = self._rdp_resolution_combo.findText(host.rdp_resolution)
+        if idx >= 0:
+            self._rdp_resolution_combo.setCurrentIndex(idx)
+        idx = self._rdp_color_depth_combo.findText(str(host.rdp_color_depth))
+        if idx >= 0:
+            self._rdp_color_depth_combo.setCurrentIndex(idx)
+        self._rdp_audio_check.setChecked(host.rdp_audio)
+        self._rdp_clipboard_check.setChecked(host.rdp_clipboard)
 
         # Load identities
         self._identity_combo.blockSignals(True)
@@ -247,13 +328,18 @@ class HostEditorContent(QWidget):
 
         # Unblock
         for w in [self._label_edit, self._address_edit, self._port_spin,
-                   self._keep_alive_spin, self._notes_edit]:
+                   self._keep_alive_spin, self._notes_edit,
+                   self._rdp_username_edit, self._rdp_domain_edit]:
             w.blockSignals(False)
-        self._protocol_combo.blockSignals(False)
+        for w in [self._protocol_combo, self._group_combo,
+                  self._rdp_resolution_combo, self._rdp_color_depth_combo]:
+            w.blockSignals(False)
         self._agent_fwd_check.blockSignals(False)
         self._compression_check.blockSignals(False)
-        self._group_combo.blockSignals(False)
+        self._rdp_audio_check.blockSignals(False)
+        self._rdp_clipboard_check.blockSignals(False)
 
+        self._update_protocol_sections(host.protocol)
         self._update_color_buttons(host.color_label)
         self._save_indicator.setText("")
 
@@ -288,7 +374,8 @@ class HostEditorContent(QWidget):
         else:
             self._identity_combo.setCurrentIndex(0)
 
-    def _add_field(self, label: str, widget: QWidget) -> QWidget:
+    def _add_field(self, label: str, widget: QWidget) -> tuple[QLabel, QWidget]:
+        """Add a labeled form field.  Returns ``(label_widget, field_widget)``."""
         lbl = QLabel(label)
         lbl.setStyleSheet(
             f"font-size: 12px; font-weight: 600; color: {Colors.TEXT_SECONDARY}; "
@@ -296,7 +383,7 @@ class HostEditorContent(QWidget):
         )
         self._form_layout.addWidget(lbl)
         self._form_layout.addWidget(widget)
-        return widget
+        return lbl, widget
 
     def _schedule_save(self) -> None:
         self._auto_save_timer.start()
@@ -315,6 +402,12 @@ class HostEditorContent(QWidget):
         self._host.ssh_keep_alive = self._keep_alive_spin.value()
         self._host.ssh_agent_forwarding = self._agent_fwd_check.isChecked()
         self._host.ssh_compression = self._compression_check.isChecked()
+        self._host.rdp_username = self._rdp_username_edit.text() or None
+        self._host.rdp_domain = self._rdp_domain_edit.text() or None
+        self._host.rdp_resolution = self._rdp_resolution_combo.currentText()
+        self._host.rdp_color_depth = int(self._rdp_color_depth_combo.currentText())
+        self._host.rdp_audio = self._rdp_audio_check.isChecked()
+        self._host.rdp_clipboard = self._rdp_clipboard_check.isChecked()
         self._host.notes = self._notes_edit.toPlainText() or None
         self._host.group_id = self._group_combo.currentData()
         identity_data = self._identity_combo.currentData()
@@ -349,8 +442,16 @@ class HostEditorContent(QWidget):
                     f"QPushButton:hover {{ border-color: {Colors.TEXT_PRIMARY}; }}"
                 )
 
+    def _update_protocol_sections(self, protocol: str) -> None:
+        """Show/hide protocol-specific option sections."""
+        for w in self._ssh_widgets:
+            w.setVisible(protocol == "ssh")
+        for w in self._rdp_widgets:
+            w.setVisible(protocol == "rdp")
+
     def _on_protocol_changed(self, protocol: str) -> None:
-        """Update the port default when the protocol selection changes."""
+        """Update the port default and visible sections when protocol changes."""
+        self._update_protocol_sections(protocol)
         if self._host is not None:
             current_port = self._get_port_for_protocol(self._host)
             # If port is still at old default, switch to new protocol's default

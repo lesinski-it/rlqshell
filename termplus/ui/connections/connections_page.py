@@ -20,6 +20,8 @@ from termplus.core.known_hosts import HostKeyStatus, KnownHostsManager
 from termplus.core.models.host import Host
 from termplus.protocols.base import AbstractConnection
 from termplus.protocols.ssh.connection import HostKeyVerifyCallback, SSHConnection
+from termplus.protocols.rdp.connection import RDPConnection
+from termplus.protocols.rdp.widget import RDPWidget
 from termplus.protocols.vnc.connection import VNCConnection
 from termplus.protocols.vnc.widget import VNCWidget
 from termplus.ui.connections.detached_window import DetachedTabWindow
@@ -86,7 +88,7 @@ class ConnectionsPage(QWidget):
         self._pool.connection_count_changed.connect(self.connection_count_changed.emit)
         self._host_key_verify_signal.connect(lambda fn: fn())
 
-    _SUPPORTED_PROTOCOLS = {"ssh", "vnc"}
+    _SUPPORTED_PROTOCOLS = {"ssh", "vnc", "rdp"}
 
     def open_connection(self, host_id: int) -> None:
         """Open a new connection to the given host."""
@@ -115,6 +117,8 @@ class ConnectionsPage(QWidget):
 
         if host.protocol == "vnc":
             self._open_vnc(host)
+        elif host.protocol == "rdp":
+            self._open_rdp(host)
         else:
             self._open_ssh(host)
 
@@ -191,6 +195,48 @@ class ConnectionsPage(QWidget):
         vnc_widget.setFocus()
 
         vnc_widget.show_overlay(f"Connecting to {host.address}:{host.vnc_port}...")
+        asyncio.ensure_future(self._connect_async(tab_id, conn, host))
+
+    def _open_rdp(self, host: Host) -> None:
+        """Open an RDP graphical session (pure Python via aardwolf)."""
+        tab_id = str(uuid.uuid4())[:8]
+        label = host.label or host.address
+
+        password, _ = self._resolve_credentials(host)
+        username = host.rdp_username
+        if not username and host.ssh_identity_id and self._credential_store.is_unlocked:
+            identity = self._credential_store.get_identity(host.ssh_identity_id)
+            if identity and identity.username:
+                username = identity.username
+
+        conn = RDPConnection(
+            hostname=host.address,
+            port=host.rdp_port,
+            username=username,
+            password=password,
+            domain=host.rdp_domain,
+            resolution=host.rdp_resolution,
+            color_depth=host.rdp_color_depth,
+            clipboard=host.rdp_clipboard,
+        )
+
+        rdp_widget = RDPWidget(conn)
+        self._terminal_stack.addWidget(rdp_widget)
+
+        conn.connected.connect(rdp_widget.clear_overlay)
+        conn.disconnected.connect(lambda tid=tab_id: self._on_disconnected(tid))
+        conn.error.connect(lambda msg, tid=tab_id: self._on_error(tid, msg))
+
+        self._sessions[tab_id] = (rdp_widget, conn)
+        self._pool.add(tab_id, conn)
+
+        self._tab_bar.add_tab(
+            tab_id, label, protocol="RDP", color=host.color_label,
+        )
+        self._terminal_stack.setCurrentWidget(rdp_widget)
+        rdp_widget.setFocus()
+
+        rdp_widget.show_overlay(f"Connecting to {host.address}:{host.rdp_port}...")
         asyncio.ensure_future(self._connect_async(tab_id, conn, host))
 
     async def _connect_async(
@@ -458,7 +504,7 @@ class ConnectionsPage(QWidget):
         if not active or active not in self._sessions:
             return False
         widget, conn = self._sessions[active]
-        if conn is None or isinstance(conn, VNCConnection):
+        if conn is None or isinstance(conn, (VNCConnection, RDPConnection)):
             return False
         conn.send(script.encode("utf-8") + b"\n")
         return True

@@ -20,6 +20,7 @@ dropbox>=12.0
 pyserial>=3.5
 telnetlib3>=2.0
 Pillow>=10.0
+aardwolf>=0.2.13
 
 # Development
 pytest>=8.0
