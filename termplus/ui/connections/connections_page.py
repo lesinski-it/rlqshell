@@ -209,6 +209,21 @@ class ConnectionsPage(QWidget):
             if identity and identity.username:
                 username = identity.username
 
+        # Prompt for credentials if missing
+        if not username or not password:
+            from termplus.ui.dialogs.rdp_credentials_dialog import RDPCredentialsDialog
+            dlg = RDPCredentialsDialog(
+                hostname=host.address,
+                username=username or "",
+                domain=host.rdp_domain or "",
+                parent=self.window(),
+            )
+            if dlg.exec() != dlg.DialogCode.Accepted:
+                return
+            username = dlg.username()
+            password = dlg.password()
+            host.rdp_domain = dlg.domain() or host.rdp_domain
+
         conn = RDPConnection(
             hostname=host.address,
             port=host.rdp_port,

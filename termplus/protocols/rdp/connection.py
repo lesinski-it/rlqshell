@@ -102,7 +102,7 @@ class RDPConnection(AbstractConnection):
             secret=self._password or "",
             username=self._username or "",
             domain=self._domain or "",
-            stype=asyauthSecret.PASSWORD if self._password else asyauthSecret.NONE,
+            stype=asyauthSecret.PASSWORD,
             protocol=asyauthProtocol.NTLM,
         )
 
