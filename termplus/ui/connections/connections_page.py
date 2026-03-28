@@ -182,6 +182,7 @@ class ConnectionsPage(QWidget):
         vnc_widget = VNCWidget(conn)
         container = RemoteDesktopContainer(vnc_widget, conn, "vnc")
         self._terminal_stack.addWidget(container)
+        container.fullscreen_requested.connect(self._tab_bar.fullscreen_requested)
 
         conn.connected.connect(container.clear_overlay)
         conn.disconnected.connect(lambda tid=tab_id: self._on_disconnected(tid))
@@ -240,6 +241,7 @@ class ConnectionsPage(QWidget):
         rdp_widget = RDPWidget(conn)
         container = RemoteDesktopContainer(rdp_widget, conn, "rdp")
         self._terminal_stack.addWidget(container)
+        container.fullscreen_requested.connect(self._tab_bar.fullscreen_requested)
 
         conn.connected.connect(container.clear_overlay)
         conn.disconnected.connect(lambda tid=tab_id: self._on_disconnected(tid))

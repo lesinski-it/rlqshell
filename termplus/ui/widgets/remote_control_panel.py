@@ -6,7 +6,7 @@ import asyncio
 import logging
 from functools import partial
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QEasingCurve, QEvent, QPoint, QPropertyAnimation, Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QPushButton,
@@ -33,6 +33,8 @@ _KEYS = {
 
 class RemoteControlPanel(QWidget):
     """Narrow side panel with toggle keys and key-combo buttons."""
+
+    fullscreen_requested = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -75,6 +77,13 @@ class RemoteControlPanel(QWidget):
         prt_btn = self._make_button("PrSc", partial(self._send_tap, "prtsc"))
         prt_btn.setToolTip("Print Screen")
         layout.addWidget(prt_btn)
+
+        # Separator
+        layout.addSpacing(8)
+
+        self._fs_btn = self._make_button("\u26f6", self._toggle_fullscreen)
+        self._fs_btn.setToolTip("Toggle fullscreen")
+        layout.addWidget(self._fs_btn)
 
         layout.addStretch()
 
@@ -176,6 +185,9 @@ class RemoteControlPanel(QWidget):
             if self._held[key_name]:
                 self._toggle_mod(key_name)
 
+    def _toggle_fullscreen(self) -> None:
+        self.fullscreen_requested.emit()
+
     # ------------------------------------------------------------------
     # Key combos
     # ------------------------------------------------------------------
@@ -200,6 +212,11 @@ class RemoteControlPanel(QWidget):
 class RemoteDesktopContainer(QWidget):
     """Wraps a VNC/RDP display widget with a RemoteControlPanel."""
 
+    fullscreen_requested = Signal()
+
+    _PANEL_WIDTH = 48
+    _ANIM_MS = 180
+
     def __init__(
         self,
         display_widget: QWidget,
@@ -209,14 +226,97 @@ class RemoteDesktopContainer(QWidget):
     ) -> None:
         super().__init__(parent)
         self._display = display_widget
-        self._panel = RemoteControlPanel()
+        # Panel is an overlay child (not in layout) — floats above the display
+        self._panel = RemoteControlPanel(self)
         self._panel.set_connection(conn, protocol)
+        self._panel.fullscreen_requested.connect(self.fullscreen_requested)
+        self._panel_visible = True
 
+        # Floating Proxmox-style tab handle
+        self._toggle_btn = QPushButton("\u2039", self)  # ‹
+        self._toggle_btn.setFixedSize(14, 38)
+        self._toggle_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._toggle_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._toggle_btn.setToolTip("Hide / show key panel")
+        self._toggle_btn.clicked.connect(self._toggle_panel)
+        self._toggle_btn.setStyleSheet(
+            f"QPushButton {{ background: {Colors.BG_SURFACE}; color: {Colors.TEXT_SECONDARY}; "
+            f"border: 1px solid {Colors.BORDER}; border-left: none; "
+            f"border-top-right-radius: 6px; border-bottom-right-radius: 6px; "
+            f"font-size: 10px; padding: 0; }}"
+            f"QPushButton:hover {{ background: {Colors.BG_HOVER}; color: {Colors.TEXT_PRIMARY}; }}"
+        )
+
+        # Auto-hide timer: collapses panel after 3 s without hover
+        self._auto_hide_timer = QTimer(self)
+        self._auto_hide_timer.setSingleShot(True)
+        self._auto_hide_timer.setInterval(3000)
+        self._auto_hide_timer.timeout.connect(self._auto_hide)
+        self._panel.installEventFilter(self)
+        self._toggle_btn.installEventFilter(self)
+
+        # Slide animation — moves panel left/right (pos), display stays full-width
+        self._anim = QPropertyAnimation(self._panel, b"pos")
+        self._anim.setDuration(self._ANIM_MS)
+        self._anim.setEasingCurve(QEasingCurve.Type.InOutCubic)
+        self._anim.valueChanged.connect(
+            lambda v: self._toggle_btn.move(max(0, v.x() + self._PANEL_WIDTH), 72)
+        )
+
+        # display_widget fills the container via layout; panel is a free overlay
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
-        layout.addWidget(self._panel)
         layout.addWidget(display_widget, 1)
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        self._panel.resize(self._PANEL_WIDTH, self.height())
+        self._toggle_btn.move(self._PANEL_WIDTH, 72)
+        self._panel.raise_()
+        self._toggle_btn.raise_()
+        self._auto_hide_timer.start()
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._panel.resize(self._PANEL_WIDTH, self.height())
+        self._toggle_btn.move(max(0, self._panel.x() + self._PANEL_WIDTH), 72)
+        self._panel.raise_()
+        self._toggle_btn.raise_()
+
+    def eventFilter(self, obj, event) -> bool:
+        if obj in (self._panel, self._toggle_btn):
+            t = event.type()
+            if t == QEvent.Type.Enter:
+                self._auto_hide_timer.stop()
+            elif t == QEvent.Type.Leave:
+                # Brief delay so moving between panel↔toggle doesn't trigger hide
+                QTimer.singleShot(120, self._schedule_hide)
+        return super().eventFilter(obj, event)
+
+    def _schedule_hide(self) -> None:
+        if not (self._panel.underMouse() or self._toggle_btn.underMouse()):
+            if self._panel_visible:
+                self._auto_hide_timer.start()
+
+    def _auto_hide(self) -> None:
+        if self._panel_visible:
+            self._toggle_panel()
+
+    def _toggle_panel(self) -> None:
+        self._anim.stop()
+        if self._panel_visible:
+            self._auto_hide_timer.stop()
+            self._anim.setStartValue(QPoint(0, 0))
+            self._anim.setEndValue(QPoint(-self._PANEL_WIDTH, 0))
+            self._toggle_btn.setText("\u203a")  # ›
+        else:
+            self._anim.setStartValue(QPoint(-self._PANEL_WIDTH, 0))
+            self._anim.setEndValue(QPoint(0, 0))
+            self._toggle_btn.setText("\u2039")  # ‹
+            self._auto_hide_timer.start()
+        self._panel_visible = not self._panel_visible
+        self._anim.start()
 
     # Proxy overlay API so ConnectionsPage can treat this like VNC/RDP widget
     def show_overlay(self, text: str, color: str | None = None) -> None:
