@@ -21,6 +21,17 @@ def main() -> None:
 
     logger.info("Starting Termplus…")
 
+    # Show splash screen as early as possible
+    from PySide6.QtWidgets import QApplication
+    from termplus.app.constants import APP_VERSION
+    from termplus.ui.splash_screen import SplashScreen
+
+    splash = SplashScreen(APP_VERSION)
+    splash.show()
+    splash.raise_()
+    QApplication.processEvents()
+    splash.update_progress(5, "Loading theme…")
+
     # Apply theme
     from termplus.ui.themes.theme_manager import ThemeManager
 
@@ -29,12 +40,14 @@ def main() -> None:
     theme_mgr.apply_theme(app, theme_name)
 
     # Install qasync event loop BEFORE creating any widgets that need async
+    splash.update_progress(15, "Initializing event loop…")
     import qasync
 
     loop = qasync.QEventLoop(app)
     asyncio.set_event_loop(loop)
 
     # Initialize database and vault
+    splash.update_progress(30, "Loading modules…")
     from termplus.core.connection_pool import ConnectionPool
     from termplus.core.credential_store import CredentialStore
     from termplus.core.database import Database
@@ -53,11 +66,18 @@ def main() -> None:
     from termplus.ui.top_bar import TopBar
     from termplus.ui.vault.vault_page import VaultPage
 
+    splash.update_progress(55, "Opening database…")
     db = Database(app.config.db_path)
+
+    splash.update_progress(65, "Unlocking vault…")
     vault = Vault(db)
     vault.initialize()
 
     credential_store = CredentialStore(db, app.config.vault_key_path)
+
+    # Close splash before asking for master password
+    splash.update_progress(75, "Ready…")
+    splash.close()
 
     # Master password dialog — unlock or set new password
     from termplus.ui.dialogs.master_password_dialog import MasterPasswordDialog
@@ -228,6 +248,7 @@ def main() -> None:
     ToastManager.instance().set_parent(window)
 
     window.set_cleanup_callback(_cleanup)
+
     window.show()
 
     with loop:

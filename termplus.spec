@@ -24,11 +24,14 @@ a = Analysis(
     ['termplus/main.py'],
     pathex=['.'],
     binaries=extra_binaries + pyside6_binaries + shiboken6_binaries,
-    datas=[],
+    datas=[
+        ('termplus/resources', 'termplus/resources'),
+    ],
     hiddenimports=[
         'PySide6.QtCore',
         'PySide6.QtGui',
         'PySide6.QtWidgets',
+        'PySide6.QtSvg',
         'paramiko',
         'pyte',
         'qasync',
