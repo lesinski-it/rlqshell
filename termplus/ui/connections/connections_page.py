@@ -332,8 +332,13 @@ class ConnectionsPage(QWidget):
         label, protocol, color = info
         widget, conn = session
 
+        # Freeze resize to preserve terminal buffer during reparenting
+        if hasattr(widget, '_freeze_resize'):
+            widget._freeze_resize = True
+
         # Remove from stack and tab bar (keep session alive)
         self._terminal_stack.removeWidget(widget)
+        widget.setParent(None)  # fully detach from old parent
         self._tab_bar.remove_tab(tab_id)
 
         # Create floating window
@@ -343,9 +348,9 @@ class ConnectionsPage(QWidget):
         self._detached_windows[tab_id] = win
         win.show()
 
-        # Force the widget to recalculate its size in the new container
+        # Unfreeze and recalculate after layout settles
         from PySide6.QtCore import QTimer
-        QTimer.singleShot(50, lambda w=widget, c=conn: self._refresh_detached(w, c))
+        QTimer.singleShot(200, lambda w=widget, c=conn: self._refresh_detached(w, c))
 
         if not self._tab_bar.tab_count:
             self._terminal_stack.setCurrentWidget(self._empty_state)
@@ -353,11 +358,19 @@ class ConnectionsPage(QWidget):
     @staticmethod
     def _refresh_detached(widget: QWidget, conn: AbstractConnection | None) -> None:
         """Force widget refresh after detaching into a floating window."""
-        widget.resize(widget.size())  # trigger resizeEvent
+        # Unfreeze resize and recompute for new container size
+        if hasattr(widget, '_freeze_resize'):
+            widget._freeze_resize = False
+            if hasattr(widget, '_recompute_size'):
+                widget._recompute_size()
         widget.update()
-        # For SSH terminals, notify PTY of new dimensions
+        # For SSH terminals, resize PTY and send Ctrl+L to force redraw
         if conn and hasattr(widget, '_cols') and hasattr(widget, '_rows'):
-            conn.resize(widget._cols, widget._rows)
+            cols, rows = widget._cols, widget._rows
+            conn.resize(cols, rows)
+            # Ctrl+L forces bash/zsh/vim to redraw the screen
+            if hasattr(conn, 'send'):
+                conn.send(b'\x0c')
 
     def _on_tab_dock(self, tab_id: str) -> None:
         """Re-dock a floating window back into the tab bar."""
@@ -375,6 +388,10 @@ class ConnectionsPage(QWidget):
             win.close_for_dock()
             return
 
+        # Freeze resize during reparenting
+        if hasattr(widget, '_freeze_resize'):
+            widget._freeze_resize = True
+
         # Re-add to stack and tab bar
         self._terminal_stack.addWidget(widget)
         self._sessions[tab_id] = (widget, session[1])
@@ -385,9 +402,9 @@ class ConnectionsPage(QWidget):
         self._terminal_stack.setCurrentWidget(widget)
         widget.setFocus()
 
-        # Refresh after re-docking
+        # Unfreeze and refresh after layout settles
         from PySide6.QtCore import QTimer
-        QTimer.singleShot(50, lambda w=widget, c=session[1]: self._refresh_detached(w, c))
+        QTimer.singleShot(200, lambda w=widget, c=session[1]: self._refresh_detached(w, c))
 
         win.close_for_dock()
 

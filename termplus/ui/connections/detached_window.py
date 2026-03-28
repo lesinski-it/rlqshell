@@ -100,8 +100,14 @@ class DetachedTabWindow(QMainWindow):
 
         main_layout.addWidget(title_bar)
 
-        # Session content (addWidget handles reparenting)
-        main_layout.addWidget(content_widget, 1)
+        # Wrap content in a container so layout fully manages it
+        self._content_container = QWidget()
+        container_layout = QVBoxLayout(self._content_container)
+        container_layout.setContentsMargins(0, 0, 0, 0)
+        container_layout.setSpacing(0)
+        container_layout.addWidget(content_widget)
+        content_widget.setVisible(True)  # ensure visible after setParent(None)
+        main_layout.addWidget(self._content_container, 1)
 
         self.setCentralWidget(central)
         self.setStyleSheet(f"QMainWindow {{ background-color: {Colors.BG_PRIMARY}; }}")
@@ -127,12 +133,12 @@ class DetachedTabWindow(QMainWindow):
 
     def dock_back(self) -> QWidget | None:
         """Remove and return the content widget for re-docking."""
-        central = self.centralWidget()
-        if central is None:
+        container = self._content_container
+        if container is None:
             return None
-        layout = central.layout()
-        if layout and layout.count() >= 2:
-            item = layout.itemAt(1)
+        layout = container.layout()
+        if layout and layout.count() >= 1:
+            item = layout.itemAt(0)
             if item and item.widget():
                 widget = item.widget()
                 layout.removeWidget(widget)

@@ -146,6 +146,9 @@ class TerminalWidget(QWidget):
         # Dirty tracking
         self._dirty = True
 
+        # Freeze resize flag — set during detach/dock to preserve pyte buffer
+        self._freeze_resize = False
+
         self.setMinimumSize(
             int(self._cell_width * 20), int(self._cell_height * 5)
         )
@@ -407,7 +410,9 @@ class TerminalWidget(QWidget):
 
     def _recompute_size(self) -> None:
         if self.width() < 10 or self.height() < 10:
-            return  # skip resize during reparenting (avoids clearing pyte buffer)
+            return  # skip resize during reparenting
+        if self._freeze_resize:
+            return  # skip resize while detaching (preserves pyte buffer)
         new_cols = max(1, int(self.width() / self._cell_width))
         new_rows = max(1, int(self.height() / self._cell_height))
         if new_cols != self._cols or new_rows != self._rows:
