@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import sys
+import time
 
 logger = logging.getLogger(__name__)
 
@@ -26,10 +27,13 @@ def main() -> None:
     from termplus.app.constants import APP_VERSION
     from termplus.ui.splash_screen import SplashScreen
 
+    _SPLASH_MIN_SECS = 5.0
+
     splash = SplashScreen(APP_VERSION)
     splash.show()
     splash.raise_()
     QApplication.processEvents()
+    _splash_shown_at = time.monotonic()
     splash.update_progress(5, "Loading theme…")
 
     # Apply theme
@@ -75,8 +79,13 @@ def main() -> None:
 
     credential_store = CredentialStore(db, app.config.vault_key_path)
 
-    # Close splash before asking for master password
+    # Wait until minimum display time has elapsed, then close splash
     splash.update_progress(75, "Ready…")
+    _remaining = _SPLASH_MIN_SECS - (time.monotonic() - _splash_shown_at)
+    if _remaining > 0:
+        _deadline = time.monotonic() + _remaining
+        while time.monotonic() < _deadline:
+            QApplication.processEvents()
     splash.close()
 
     # Master password dialog — unlock or set new password
