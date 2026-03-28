@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import base64
 import os
+import secrets
+import string
 
 from cryptography.fernet import Fernet, InvalidToken
 from cryptography.hazmat.primitives import hashes
@@ -45,3 +47,16 @@ def decrypt(data: bytes, key: bytes) -> bytes:
 def generate_fernet_key() -> bytes:
     """Generate a random Fernet key."""
     return Fernet.generate_key()
+
+
+def generate_recovery_code() -> str:
+    """Generate a random 25-character recovery code.
+
+    Format: XXXXX-XXXXX-XXXXX-XXXXX-XXXXX (5 groups of 5, uppercase alphanumeric).
+    Excludes visually ambiguous characters: O, 0, I, 1.
+    """
+    alphabet = "".join(
+        c for c in (string.ascii_uppercase + string.digits) if c not in "O0I1"
+    )
+    code = "".join(secrets.choice(alphabet) for _ in range(25))
+    return "-".join(code[i : i + 5] for i in range(0, 25, 5))

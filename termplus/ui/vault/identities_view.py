@@ -111,6 +111,12 @@ class IdentitiesView(QWidget):
         toolbar.setStyleSheet(
             f"background-color: {Colors.BG_PRIMARY}; "
             f"border-bottom: 1px solid {Colors.BORDER};"
+            f" QPushButton#changePwdBtn {{"
+            f" background-color: transparent; color: {Colors.TEXT_MUTED};"
+            f" border: 1px solid {Colors.BORDER}; border-radius: 6px;"
+            f" padding: 6px 14px; font-size: 12px; }}"
+            f" QPushButton#changePwdBtn:hover {{"
+            f" background-color: {Colors.BG_HOVER}; color: {Colors.TEXT_PRIMARY}; }}"
         )
         toolbar_layout = QHBoxLayout(toolbar)
         toolbar_layout.setContentsMargins(16, 8, 16, 8)
@@ -129,6 +135,13 @@ class IdentitiesView(QWidget):
         add_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         add_btn.clicked.connect(self._on_new_identity)
         toolbar_layout.addWidget(add_btn)
+
+        if credential_store.is_unlocked:
+            change_pwd_btn = QPushButton("Zmień hasło")
+            change_pwd_btn.setObjectName("changePwdBtn")
+            change_pwd_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            change_pwd_btn.clicked.connect(self._on_change_master_password)
+            toolbar_layout.addWidget(change_pwd_btn)
 
         layout.addWidget(toolbar)
 
@@ -181,6 +194,14 @@ class IdentitiesView(QWidget):
             item.clicked.connect(self._on_edit_identity)
             item.context_menu_requested.connect(self._show_context_menu)
             self._list_layout.addWidget(item)
+
+    def _on_change_master_password(self) -> None:
+        from termplus.ui.dialogs.change_master_password_dialog import (
+            ChangeMasterPasswordDialog,
+        )
+
+        dlg = ChangeMasterPasswordDialog(self._store, parent=self)
+        dlg.exec()
 
     def _on_new_identity(self) -> None:
         from termplus.ui.vault.identity_editor import IdentityEditor
