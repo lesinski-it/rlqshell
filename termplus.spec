@@ -2,7 +2,7 @@
 
 import sys
 import os
-from PyInstaller.utils.hooks import collect_dynamic_libs
+from PyInstaller.utils.hooks import collect_submodules, collect_data_files, collect_dynamic_libs
 
 block_cipher = None
 
@@ -20,59 +20,57 @@ if os.path.exists(python3_dll):
 pyside6_binaries = collect_dynamic_libs('PySide6')
 shiboken6_binaries = collect_dynamic_libs('shiboken6')
 
+# Collect ALL submodules for aardwolf and its dependencies
+hiddenimports = [
+    'PySide6.QtCore',
+    'PySide6.QtGui',
+    'PySide6.QtWidgets',
+    'PySide6.QtSvg',
+    'paramiko',
+    'pyte',
+    'qasync',
+    'cryptography',
+    'keyring',
+    'keyring.backends',
+    'keyring.backends.Windows',
+    'appdirs',
+    'aiofiles',
+    'aiohttp',
+    'bcrypt',
+    'nacl',
+    'cffi',
+    'arc4',
+    'pycryptodomex',
+]
+
+# Use collect_submodules for packages with heavy dynamic imports
+for pkg in [
+    'aardwolf',
+    'asyauth',
+    'asysocks',
+    'unicrypto',
+    'minikerberos',
+    'PIL',
+    'Cryptodome',
+]:
+    hiddenimports += collect_submodules(pkg)
+
+# Data files (e.g. aardwolf may have data files)
+extra_datas = []
+for pkg in ['aardwolf', 'unicrypto']:
+    try:
+        extra_datas += collect_data_files(pkg)
+    except Exception:
+        pass
+
 a = Analysis(
     ['termplus/main.py'],
     pathex=['.'],
     binaries=extra_binaries + pyside6_binaries + shiboken6_binaries,
     datas=[
         ('termplus/resources', 'termplus/resources'),
-    ],
-    hiddenimports=[
-        'PySide6.QtCore',
-        'PySide6.QtGui',
-        'PySide6.QtWidgets',
-        'PySide6.QtSvg',
-        'paramiko',
-        'pyte',
-        'qasync',
-        'cryptography',
-        'keyring',
-        'keyring.backends',
-        'keyring.backends.Windows',
-        'appdirs',
-        'aiofiles',
-        'aiohttp',
-        'bcrypt',
-        'nacl',
-        'cffi',
-        # aardwolf RDP ecosystem (all subpackages)
-        'aardwolf', 'aardwolf.connection', 'aardwolf.vncconnection',
-        'aardwolf.channels', 'aardwolf.commons', 'aardwolf.extensions',
-        'aardwolf.keyboard', 'aardwolf.network', 'aardwolf.protocol',
-        'aardwolf.transport', 'aardwolf.utils', 'aardwolf.utils.rlers',
-        'aardwolf.extensions.RDPECLIP', 'aardwolf.extensions.RDPEDYC',
-        'asyauth', 'asyauth.common', 'asyauth.protocols', 'asyauth.utils',
-        'asysocks', 'asysocks.unicomm', 'asysocks.unicomm.common',
-        'asysocks.client', 'asysocks.common', 'asysocks.protocol',
-        'asysocks.network', 'asysocks.security', 'asysocks.authentication',
-        'unicrypto', 'unicrypto.backends', 'unicrypto.symmetric',
-        'unicrypto.backends.cryptography', 'unicrypto.backends.cryptography.AES',
-        'unicrypto.backends.cryptography.DES', 'unicrypto.backends.cryptography.RC4',
-        'unicrypto.backends.cryptography.TDES',
-        'unicrypto.backends.pure', 'unicrypto.backends.pure.AES',
-        'unicrypto.backends.pure.DES', 'unicrypto.backends.pure.RC4',
-        'unicrypto.backends.pure.TDES', 'unicrypto.backends.pure.MD4',
-        'unicrypto.backends.pure.external',
-        'unicrypto.backends.pycryptodomex', 'unicrypto.backends.pycryptodomex.AES',
-        'unicrypto.backends.pycryptodomex.DES', 'unicrypto.backends.pycryptodomex.RC4',
-        'unicrypto.backends.pycryptodomex.TDES',
-        'unicrypto.hashlib', 'unicrypto.hmac', 'unicrypto.kdf',
-        'unicrypto.cmac', 'unicrypto.pbkdf2',
-        'minikerberos', 'minikerberos.common', 'minikerberos.protocol',
-        'minikerberos.gssapi', 'minikerberos.network', 'minikerberos.security',
-        'arc4', 'PIL', 'Pillow',
-        'pycryptodomex', 'Cryptodome',
-    ],
+    ] + extra_datas,
+    hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
