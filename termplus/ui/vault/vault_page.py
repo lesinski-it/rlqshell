@@ -24,6 +24,7 @@ from termplus.core.snippet_manager import SnippetManager
 from termplus.ui.vault.history_view import HistoryView
 from termplus.ui.vault.host_editor import HostEditorContent
 from termplus.ui.vault.host_list import HostListWidget
+from termplus.ui.vault.identities_view import IdentitiesView
 from termplus.ui.vault.keychain_view import KeychainView
 from termplus.ui.vault.known_hosts_view import KnownHostsView
 from termplus.ui.vault.port_forward_view import PortForwardView
@@ -53,6 +54,7 @@ class VaultPage(QWidget):
 
     connect_requested = Signal(int)  # host_id
     sftp_requested = Signal(int)  # host_id
+    snippet_run_requested = Signal(str)  # script content
 
     def __init__(
         self,
@@ -97,6 +99,9 @@ class VaultPage(QWidget):
         # Snippets
         if snippet_manager is not None:
             self._snippets_section: QWidget = SnippetListView(snippet_manager)
+            self._snippets_section.snippet_run_requested.connect(
+                self.snippet_run_requested.emit
+            )
         else:
             self._snippets_section = _PlaceholderSection("Snippets")
         self._content_stack.addWidget(self._snippets_section)
@@ -107,6 +112,15 @@ class VaultPage(QWidget):
         else:
             self._keychain_section = _PlaceholderSection("Keychain")
         self._content_stack.addWidget(self._keychain_section)
+
+        # Identities view
+        if credential_store is not None and keychain is not None:
+            self._identities_section: QWidget = IdentitiesView(
+                credential_store, keychain
+            )
+        else:
+            self._identities_section = _PlaceholderSection("Identities")
+        self._content_stack.addWidget(self._identities_section)
 
         # Known Hosts view
         if known_hosts is not None:
@@ -132,9 +146,10 @@ class VaultPage(QWidget):
             "hosts": 0,
             "snippets": 1,
             "keychain": 2,
-            "known_hosts": 3,
-            "port_forward": 4,
-            "history": 5,
+            "identities": 3,
+            "known_hosts": 4,
+            "port_forward": 5,
+            "history": 6,
         }
 
         # Host editor (slide-in panel — added to layout so it appears on the right)

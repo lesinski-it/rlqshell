@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import logging
 
-from PySide6.QtCore import QSize, Qt
+from PySide6.QtCore import QSize, Qt, QTimer, Signal
 from PySide6.QtWidgets import (
+    QHBoxLayout,
     QLabel,
     QMainWindow,
+    QPushButton,
     QStackedWidget,
     QVBoxLayout,
     QWidget,
@@ -34,6 +36,8 @@ class _PlaceholderPage(QWidget):
 class MainWindow(QMainWindow):
     """Termplus main window — TopBar + QStackedWidget for pages."""
 
+    fullscreen_toggled = Signal()
+
     def __init__(self) -> None:
         super().__init__()
 
@@ -46,6 +50,36 @@ class MainWindow(QMainWindow):
         main_layout = QVBoxLayout(central)
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
+
+        # Fullscreen hint bar (hidden by default)
+        self._fs_bar = QWidget()
+        self._fs_bar.setFixedHeight(32)
+        self._fs_bar.setStyleSheet(
+            f"background-color: {Colors.ACCENT};"
+        )
+        fs_layout = QHBoxLayout(self._fs_bar)
+        fs_layout.setContentsMargins(0, 0, 0, 0)
+        fs_layout.setSpacing(0)
+        fs_layout.addStretch()
+        fs_label = QLabel("Press F11 to exit fullscreen")
+        fs_label.setStyleSheet(
+            "color: white; font-size: 12px; font-weight: 600; background: transparent;"
+        )
+        fs_layout.addWidget(fs_label)
+        fs_layout.addSpacing(12)
+        fs_exit_btn = QPushButton("Exit")
+        fs_exit_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        fs_exit_btn.setStyleSheet(
+            "QPushButton { color: white; background: rgba(255,255,255,0.2); "
+            "border: 1px solid rgba(255,255,255,0.4); border-radius: 4px; "
+            "padding: 2px 12px; font-size: 11px; font-weight: 600; }"
+            "QPushButton:hover { background: rgba(255,255,255,0.3); }"
+        )
+        fs_exit_btn.clicked.connect(lambda: self.fullscreen_toggled.emit())
+        fs_layout.addWidget(fs_exit_btn)
+        fs_layout.addStretch()
+        self._fs_bar.setVisible(False)
+        main_layout.addWidget(self._fs_bar)
 
         # Top navigation bar
         self._top_bar = TopBar()
@@ -84,6 +118,7 @@ class MainWindow(QMainWindow):
         self._vault_page.deleteLater()
         self._vault_page = page
         self._stack.insertWidget(TopBar.PAGE_VAULT, page)
+        self._restore_stack_index()
 
     def set_connections_page(self, page: QWidget) -> None:
         """Replace the placeholder connections page."""
@@ -91,6 +126,7 @@ class MainWindow(QMainWindow):
         self._connections_page.deleteLater()
         self._connections_page = page
         self._stack.insertWidget(TopBar.PAGE_CONNECTIONS, page)
+        self._restore_stack_index()
 
     def set_sftp_page(self, page: QWidget) -> None:
         """Replace the placeholder SFTP page."""
@@ -98,10 +134,19 @@ class MainWindow(QMainWindow):
         self._sftp_page.deleteLater()
         self._sftp_page = page
         self._stack.insertWidget(TopBar.PAGE_SFTP, page)
+        self._restore_stack_index()
+
+    def _restore_stack_index(self) -> None:
+        """Re-sync stack index with top bar after widget replacement."""
+        self._stack.setCurrentIndex(self._top_bar._current_index)
 
     def _on_page_changed(self, index: int) -> None:
         self._stack.setCurrentIndex(index)
         logger.debug("Switched to page %d", index)
+
+    def set_fullscreen_bar_visible(self, visible: bool) -> None:
+        """Show or hide the fullscreen hint bar."""
+        self._fs_bar.setVisible(visible)
 
     def _on_settings_requested(self) -> None:
         logger.info("Settings requested — dialog coming in Stage 8")

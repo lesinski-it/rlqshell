@@ -189,6 +189,38 @@ class SFTPSession:
         await loop.run_in_executor(None, self._sftp.rename, old_path, new_path)
         logger.info("Renamed %s → %s", old_path, new_path)
 
+    async def read_file(self, remote_path: str, max_size: int = 5 * 1024 * 1024) -> bytes:
+        """Read a remote file into memory. Raises ValueError if file exceeds max_size."""
+        if self._sftp is None:
+            raise RuntimeError("SFTP not connected")
+
+        loop = asyncio.get_running_loop()
+        attrs = await loop.run_in_executor(None, self._sftp.stat, remote_path)
+        if attrs.st_size and attrs.st_size > max_size:
+            raise ValueError(
+                f"File too large ({attrs.st_size} bytes, max {max_size})"
+            )
+
+        def _read():
+            with self._sftp.open(remote_path, "rb") as f:
+                return f.read()
+
+        return await loop.run_in_executor(None, _read)
+
+    async def write_file(self, remote_path: str, data: bytes) -> None:
+        """Write data to a remote file."""
+        if self._sftp is None:
+            raise RuntimeError("SFTP not connected")
+
+        loop = asyncio.get_running_loop()
+
+        def _write():
+            with self._sftp.open(remote_path, "wb") as f:
+                f.write(data)
+
+        await loop.run_in_executor(None, _write)
+        logger.info("Written %d bytes to %s", len(data), remote_path)
+
     async def stat(self, path: str) -> paramiko.SFTPAttributes | None:
         """Get file attributes."""
         if self._sftp is None:

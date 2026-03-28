@@ -16,6 +16,7 @@ SECTIONS = [
     ("Hosts", "hosts"),
     ("Snippets", "snippets"),
     ("Keychain", "keychain"),
+    ("Identities", "identities"),
     ("Known Hosts", "known_hosts"),
     ("Port Forwarding", "port_forward"),
     ("History", "history"),

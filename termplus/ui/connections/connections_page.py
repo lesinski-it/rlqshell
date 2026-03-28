@@ -18,7 +18,11 @@ from termplus.core.host_manager import HostManager
 from termplus.core.keychain import Keychain
 from termplus.core.known_hosts import HostKeyStatus, KnownHostsManager
 from termplus.core.models.host import Host
+from termplus.protocols.base import AbstractConnection
 from termplus.protocols.ssh.connection import HostKeyVerifyCallback, SSHConnection
+from termplus.protocols.vnc.connection import VNCConnection
+from termplus.protocols.vnc.widget import VNCWidget
+from termplus.ui.connections.detached_window import DetachedTabWindow
 from termplus.ui.connections.tab_bar import ConnectionTabBar
 from termplus.ui.connections.terminal_widget import TerminalWidget
 from termplus.ui.dialogs.host_key_dialog import HostKeyDialog
@@ -59,6 +63,7 @@ class ConnectionsPage(QWidget):
         self._tab_bar = ConnectionTabBar()
         self._tab_bar.tab_selected.connect(self._on_tab_selected)
         self._tab_bar.tab_close_requested.connect(self._on_tab_close)
+        self._tab_bar.tab_detach_requested.connect(self._on_tab_detach)
         layout.addWidget(self._tab_bar)
 
         # Terminal stack
@@ -73,34 +78,57 @@ class ConnectionsPage(QWidget):
         )
         self._terminal_stack.addWidget(self._empty_state)
 
-        # Track tab_id → (terminal, connection)
-        self._sessions: dict[str, tuple[TerminalWidget, SSHConnection]] = {}
+        # Track tab_id → (widget, connection)
+        self._sessions: dict[str, tuple[QWidget, AbstractConnection | None]] = {}
+        self._detached_windows: dict[str, DetachedTabWindow] = {}
         self._history_records: dict[str, int] = {}  # tab_id → history record id
 
         self._pool.connection_count_changed.connect(self.connection_count_changed.emit)
         self._host_key_verify_signal.connect(lambda fn: fn())
 
+    _SUPPORTED_PROTOCOLS = {"ssh", "vnc"}
+
     def open_connection(self, host_id: int) -> None:
-        """Open a new SSH connection to the given host."""
+        """Open a new connection to the given host."""
         host = self._host_manager.get_host(host_id)
         if host is None:
             logger.error("Host %d not found", host_id)
             return
 
+        if host.protocol not in self._SUPPORTED_PROTOCOLS:
+            logger.warning("Protocol %s is not yet supported", host.protocol)
+            tab_id = str(uuid.uuid4())[:8]
+            label = host.label or host.address
+            terminal = TerminalWidget()
+            self._terminal_stack.addWidget(terminal)
+            terminal.show_overlay(
+                f"Protocol \"{host.protocol.upper()}\" is not yet supported.",
+                color=Colors.WARNING,
+            )
+            self._sessions[tab_id] = (terminal, None)
+            self._tab_bar.add_tab(
+                tab_id, label, protocol=host.protocol.upper(),
+                color=host.color_label,
+            )
+            self._terminal_stack.setCurrentWidget(terminal)
+            return
+
+        if host.protocol == "vnc":
+            self._open_vnc(host)
+        else:
+            self._open_ssh(host)
+
+    def _open_ssh(self, host: Host) -> None:
+        """Open an SSH terminal session."""
         tab_id = str(uuid.uuid4())[:8]
         label = host.label or host.address
 
-        # Create terminal widget
         terminal = TerminalWidget()
         self._terminal_stack.addWidget(terminal)
 
-        # Resolve credentials
         password, pkey = self._resolve_credentials(host)
-
-        # Host key verification callback
         hk_callback = HostKeyVerifyCallback(self._verify_host_key)
 
-        # Create SSH connection
         conn = SSHConnection(
             hostname=host.address,
             port=host.ssh_port,
@@ -113,7 +141,6 @@ class ConnectionsPage(QWidget):
             host_key_callback=hk_callback,
         )
 
-        # Wire signals
         conn.data_received.connect(terminal.feed)
         conn.connected.connect(terminal.clear_overlay)
         conn.disconnected.connect(lambda tid=tab_id: self._on_disconnected(tid))
@@ -124,22 +151,52 @@ class ConnectionsPage(QWidget):
         self._sessions[tab_id] = (terminal, conn)
         self._pool.add(tab_id, conn)
 
-        # Add tab and switch to it
         self._tab_bar.add_tab(
-            tab_id, label, protocol=host.protocol.upper(),
-            color=host.color_label,
+            tab_id, label, protocol="SSH", color=host.color_label,
         )
         self._terminal_stack.setCurrentWidget(terminal)
         terminal.setFocus()
 
-        # Show connecting status
         terminal.show_overlay(f"Connecting to {host.address}:{host.ssh_port}...")
-
-        # Start connection asynchronously
         asyncio.ensure_future(self._connect_async(tab_id, conn, host))
 
-    async def _connect_async(self, tab_id: str, conn: SSHConnection, host: Host) -> None:
-        """Asynchronously establish the SSH connection."""
+    def _open_vnc(self, host: Host) -> None:
+        """Open a VNC graphical session."""
+        tab_id = str(uuid.uuid4())[:8]
+        label = host.label or host.address
+
+        password, _ = self._resolve_credentials(host)
+
+        conn = VNCConnection(
+            hostname=host.address,
+            port=host.vnc_port,
+            password=password,
+            view_only=host.vnc_view_only,
+        )
+
+        vnc_widget = VNCWidget(conn)
+        self._terminal_stack.addWidget(vnc_widget)
+
+        conn.connected.connect(vnc_widget.clear_overlay)
+        conn.disconnected.connect(lambda tid=tab_id: self._on_disconnected(tid))
+        conn.error.connect(lambda msg, tid=tab_id: self._on_error(tid, msg))
+
+        self._sessions[tab_id] = (vnc_widget, conn)
+        self._pool.add(tab_id, conn)
+
+        self._tab_bar.add_tab(
+            tab_id, label, protocol="VNC", color=host.color_label,
+        )
+        self._terminal_stack.setCurrentWidget(vnc_widget)
+        vnc_widget.setFocus()
+
+        vnc_widget.show_overlay(f"Connecting to {host.address}:{host.vnc_port}...")
+        asyncio.ensure_future(self._connect_async(tab_id, conn, host))
+
+    async def _connect_async(
+        self, tab_id: str, conn: AbstractConnection, host: Host,
+    ) -> None:
+        """Asynchronously establish the connection."""
         try:
             await conn.connect()
             logger.info("Connection %s established", tab_id)
@@ -153,8 +210,8 @@ class ConnectionsPage(QWidget):
             logger.error("Connection %s failed: %s", tab_id, exc)
             session = self._sessions.get(tab_id)
             if session:
-                terminal, _ = session
-                terminal.show_overlay(f"Connection failed: {exc}", color=Colors.DANGER)
+                widget, _ = session
+                widget.show_overlay(f"Connection failed: {exc}", color=Colors.DANGER)  # type: ignore[union-attr]
 
     def _verify_host_key(
         self, hostname: str, port: int, key_type: str, fingerprint: str,
@@ -221,17 +278,18 @@ class ConnectionsPage(QWidget):
     def _on_tab_selected(self, tab_id: str) -> None:
         session = self._sessions.get(tab_id)
         if session:
-            terminal, _ = session
-            self._terminal_stack.setCurrentWidget(terminal)
-            terminal.setFocus()
+            widget, _ = session
+            self._terminal_stack.setCurrentWidget(widget)
+            widget.setFocus()
 
     def _on_tab_close(self, tab_id: str) -> None:
         session = self._sessions.pop(tab_id, None)
         if session:
-            terminal, conn = session
-            conn.close()
-            self._terminal_stack.removeWidget(terminal)
-            terminal.deleteLater()
+            widget, conn = session
+            if conn is not None:
+                conn.close()
+            self._terminal_stack.removeWidget(widget)
+            widget.deleteLater()
         # Record disconnect in history
         rec_id = self._history_records.pop(tab_id, None)
         if rec_id and self._history:
@@ -246,8 +304,8 @@ class ConnectionsPage(QWidget):
         logger.info("Connection %s disconnected", tab_id)
         session = self._sessions.get(tab_id)
         if session:
-            terminal, _ = session
-            terminal.show_overlay("Disconnected", color=Colors.WARNING)
+            widget, _ = session
+            widget.show_overlay("Disconnected", color=Colors.WARNING)  # type: ignore[union-attr]
         rec_id = self._history_records.pop(tab_id, None)
         if rec_id and self._history:
             self._history.record_disconnect(rec_id)
@@ -256,8 +314,96 @@ class ConnectionsPage(QWidget):
         logger.error("Connection %s error: %s", tab_id, message)
         session = self._sessions.get(tab_id)
         if session:
-            terminal, _ = session
-            terminal.show_overlay(f"Error: {message}", color=Colors.DANGER)
+            widget, _ = session
+            widget.show_overlay(f"Error: {message}", color=Colors.DANGER)  # type: ignore[union-attr]
+
+    # ------------------------------------------------------------------
+    # Detach / Dock
+    # ------------------------------------------------------------------
+
+    def _on_tab_detach(self, tab_id: str) -> None:
+        """Detach a tab into a floating window."""
+        session = self._sessions.get(tab_id)
+        if not session:
+            return
+        info = self._tab_bar.tab_info(tab_id)
+        if not info:
+            return
+        label, protocol, color = info
+        widget, conn = session
+
+        # Remove from stack and tab bar (keep session alive)
+        self._terminal_stack.removeWidget(widget)
+        self._tab_bar.remove_tab(tab_id)
+
+        # Create floating window
+        win = DetachedTabWindow(tab_id, label, protocol, color, widget)
+        win.dock_requested.connect(self._on_tab_dock)
+        win.closed.connect(self._on_detached_close)
+        self._detached_windows[tab_id] = win
+        win.show()
+
+        # Force the widget to recalculate its size in the new container
+        from PySide6.QtCore import QTimer
+        QTimer.singleShot(50, lambda w=widget, c=conn: self._refresh_detached(w, c))
+
+        if not self._tab_bar.tab_count:
+            self._terminal_stack.setCurrentWidget(self._empty_state)
+
+    @staticmethod
+    def _refresh_detached(widget: QWidget, conn: AbstractConnection | None) -> None:
+        """Force widget refresh after detaching into a floating window."""
+        widget.resize(widget.size())  # trigger resizeEvent
+        widget.update()
+        # For SSH terminals, notify PTY of new dimensions
+        if conn and hasattr(widget, '_cols') and hasattr(widget, '_rows'):
+            conn.resize(widget._cols, widget._rows)
+
+    def _on_tab_dock(self, tab_id: str) -> None:
+        """Re-dock a floating window back into the tab bar."""
+        win = self._detached_windows.pop(tab_id, None)
+        if not win:
+            return
+        session = self._sessions.get(tab_id)
+        if not session:
+            win.close_for_dock()
+            return
+
+        # Retrieve the content widget from the floating window
+        widget = win.dock_back()
+        if widget is None:
+            win.close_for_dock()
+            return
+
+        # Re-add to stack and tab bar
+        self._terminal_stack.addWidget(widget)
+        self._sessions[tab_id] = (widget, session[1])
+        self._tab_bar.add_tab(
+            tab_id, win.label_text, protocol=win.protocol,
+            color=win.color,
+        )
+        self._terminal_stack.setCurrentWidget(widget)
+        widget.setFocus()
+
+        # Refresh after re-docking
+        from PySide6.QtCore import QTimer
+        QTimer.singleShot(50, lambda w=widget, c=session[1]: self._refresh_detached(w, c))
+
+        win.close_for_dock()
+
+    def _on_detached_close(self, tab_id: str) -> None:
+        """Handle closing of a detached window — full session cleanup."""
+        self._detached_windows.pop(tab_id, None)
+        session = self._sessions.pop(tab_id, None)
+        if session:
+            widget, conn = session
+            if conn is not None:
+                conn.close()
+            widget.deleteLater()
+        rec_id = self._history_records.pop(tab_id, None)
+        if rec_id and self._history:
+            self._history.record_disconnect(rec_id)
+        self._pool.remove(tab_id)
 
     def close_current_tab(self) -> None:
         """Close the currently active tab."""
@@ -266,8 +412,8 @@ class ConnectionsPage(QWidget):
             self._on_tab_close(active)
 
     def next_tab(self) -> None:
-        """Switch to the next tab."""
-        tab_ids = list(self._sessions.keys())
+        """Switch to the next tab (visual order)."""
+        tab_ids = self._tab_bar.ordered_tab_ids()
         if len(tab_ids) < 2:
             return
         active = self._tab_bar.active_tab
@@ -276,8 +422,8 @@ class ConnectionsPage(QWidget):
             self._tab_bar.select_tab(tab_ids[idx])
 
     def prev_tab(self) -> None:
-        """Switch to the previous tab."""
-        tab_ids = list(self._sessions.keys())
+        """Switch to the previous tab (visual order)."""
+        tab_ids = self._tab_bar.ordered_tab_ids()
         if len(tab_ids) < 2:
             return
         active = self._tab_bar.active_tab
@@ -285,7 +431,29 @@ class ConnectionsPage(QWidget):
             idx = (tab_ids.index(active) - 1) % len(tab_ids)
             self._tab_bar.select_tab(tab_ids[idx])
 
+    def send_to_active_terminal(self, script: str) -> bool:
+        """Send a script/command to the currently active terminal session.
+
+        Returns True if the command was sent, False if no active session.
+        Only works for text-based protocols (SSH, Telnet).
+        """
+        active = self._tab_bar.active_tab
+        if not active or active not in self._sessions:
+            return False
+        widget, conn = self._sessions[active]
+        if conn is None or isinstance(conn, VNCConnection):
+            return False
+        conn.send(script.encode("utf-8") + b"\n")
+        return True
+
+    def set_tab_bar_visible(self, visible: bool) -> None:
+        """Show or hide the connection tab bar (for fullscreen mode)."""
+        self._tab_bar.setVisible(visible)
+
     def close_all(self) -> None:
-        """Close all connections."""
+        """Close all connections (docked and detached)."""
+        for tab_id, win in list(self._detached_windows.items()):
+            win.close_for_dock()
+            self._detached_windows.pop(tab_id, None)
         for tab_id in list(self._sessions):
             self._on_tab_close(tab_id)

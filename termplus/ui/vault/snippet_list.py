@@ -198,7 +198,10 @@ class SnippetListView(QWidget):
         if action == run_action:
             snippet = self._manager.get_snippet(snippet_id)
             if snippet:
-                self.snippet_run_requested.emit(snippet.script)
+                script = snippet.script
+                if snippet.run_as_sudo and not script.lstrip().startswith("sudo "):
+                    script = f"sudo {script}"
+                self.snippet_run_requested.emit(script)
         elif action == edit_action:
             self._edit_snippet(snippet_id)
         elif action == delete_action:

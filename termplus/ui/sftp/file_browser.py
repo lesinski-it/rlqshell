@@ -60,9 +60,17 @@ class FileBrowser(QWidget):
         tb_layout.setSpacing(8)
 
         # Navigation buttons
-        self._back_btn = QPushButton("<")
+        self._back_btn = QPushButton("..")
         self._back_btn.setFixedSize(28, 28)
+        self._back_btn.setToolTip("Go to parent directory")
         self._back_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._back_btn.setStyleSheet(
+            f"QPushButton {{ font-size: 13px; font-weight: 700; color: {Colors.TEXT_SECONDARY}; "
+            f"background-color: {Colors.BG_HOVER}; border: 1px solid {Colors.BORDER}; "
+            f"border-radius: 6px; padding: 0; }}"
+            f"QPushButton:hover {{ color: {Colors.TEXT_PRIMARY}; "
+            f"background-color: {Colors.BG_ACTIVE}; }}"
+        )
         self._back_btn.clicked.connect(self._go_up)
         tb_layout.addWidget(self._back_btn)
 
@@ -120,11 +128,24 @@ class FileBrowser(QWidget):
 
     async def navigate(self, path: str | None = None) -> None:
         """Navigate to a directory and refresh the listing."""
-        if path:
-            await self._sftp.cd(path)
-        self._path_label.setText(self._sftp.cwd)
-        self._entries = await self._sftp.list_dir()
-        self._populate_table()
+        old_cwd = self._sftp.cwd
+        try:
+            if path:
+                await self._sftp.cd(path)
+            self._path_label.setText(self._sftp.cwd)
+            self._entries = await self._sftp.list_dir()
+            self._populate_table()
+        except PermissionError:
+            self._show_error("Permission denied: cannot access this directory")
+            if path:
+                await self._sftp.cd(old_cwd)
+        except Exception as exc:
+            self._show_error(f"Navigation failed: {exc}")
+            if path:
+                try:
+                    await self._sftp.cd(old_cwd)
+                except Exception:
+                    pass
 
     def _populate_table(self) -> None:
         visible = [
@@ -182,8 +203,11 @@ class FileBrowser(QWidget):
         try:
             await self._sftp.mkdir(name)
             await self.navigate()
-        except Exception:
+        except PermissionError:
+            self._show_error(f"Permission denied: cannot create folder '{name}'")
+        except Exception as exc:
             logger.exception("Failed to create directory: %s", name)
+            self._show_error(f"Failed to create folder: {exc}")
 
     def _on_upload(self) -> None:
         files, _ = QFileDialog.getOpenFileNames(self, "Upload Files")
@@ -206,8 +230,13 @@ class FileBrowser(QWidget):
         menu = QMenu(self)
 
         if not entry.is_dir:
+            edit_action = menu.addAction("Edit")
+            edit_action.triggered.connect(lambda: self._edit_file(entry))
+
             dl_action = menu.addAction("Download")
             dl_action.triggered.connect(lambda: self._download_file(entry))
+
+            menu.addSeparator()
 
         rename_action = menu.addAction("Rename")
         rename_action.triggered.connect(lambda: self._rename_entry(entry))
@@ -218,6 +247,21 @@ class FileBrowser(QWidget):
         del_action.triggered.connect(lambda: self._delete_entry(entry))
 
         menu.exec(self._table.viewport().mapToGlobal(pos))
+
+    def _show_error(self, message: str) -> None:
+        """Show an error toast notification."""
+        from termplus.ui.widgets.toast import ToastManager
+
+        ToastManager.instance().show_toast(message, "error", duration_ms=5000)
+
+    def _edit_file(self, entry: FileEntry) -> None:
+        """Open a remote file in the text editor dialog."""
+        from termplus.ui.sftp.text_editor import RemoteTextEditor
+
+        editor = RemoteTextEditor(self._sftp, entry.path, parent=self.window())
+        editor.exec()
+        # Refresh listing in case file was modified
+        asyncio.ensure_future(self.navigate())
 
     def _download_file(self, entry: FileEntry) -> None:
         local, _ = QFileDialog.getSaveFileName(self, "Save As", entry.name)
@@ -241,8 +285,11 @@ class FileBrowser(QWidget):
         try:
             await self._sftp.rename(old_path, new_path)
             await self.navigate()
-        except Exception:
+        except PermissionError:
+            self._show_error("Permission denied: cannot rename this item")
+        except Exception as exc:
             logger.exception("Rename failed: %s → %s", old_path, new_path)
+            self._show_error(f"Rename failed: {exc}")
 
     def _delete_entry(self, entry: FileEntry) -> None:
         from PySide6.QtWidgets import QMessageBox
@@ -262,5 +309,8 @@ class FileBrowser(QWidget):
             else:
                 await self._sftp.delete(entry.path)
             await self.navigate()
-        except Exception:
+        except PermissionError:
+            self._show_error(f"Permission denied: cannot delete '{entry.name}'")
+        except Exception as exc:
             logger.exception("Delete failed: %s", entry.path)
+            self._show_error(f"Delete failed: {exc}")

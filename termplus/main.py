@@ -112,6 +112,17 @@ def main() -> None:
 
     vault_page.sftp_requested.connect(_open_sftp_from_vault)
 
+    def _on_snippet_run(script: str) -> None:
+        if connections_page.send_to_active_terminal(script):
+            window.top_bar.navigate_to(TopBar.PAGE_CONNECTIONS)
+        else:
+            from termplus.ui.widgets.toast import ToastManager
+            ToastManager.instance().show_toast(
+                "No active terminal — connect to a host first.",
+            )
+
+    vault_page.snippet_run_requested.connect(_on_snippet_run)
+
     # Install SFTP page
     sftp_page = SFTPPage(
         vault.hosts, credential_store, keychain, connection_pool,
@@ -173,10 +184,28 @@ def main() -> None:
     sc_prev_tab = QShortcut(QKeySequence("Ctrl+Shift+Tab"), window)
     sc_prev_tab.activated.connect(connections_page.prev_tab)
 
-    # F11 fullscreen toggle
+    # F11 fullscreen toggle — hides top bar + tab bar for immersive mode
+    def _toggle_fullscreen():
+        if window.isFullScreen():
+            window.showNormal()
+            window.top_bar.setVisible(True)
+            window.set_fullscreen_bar_visible(False)
+            connections_page.set_tab_bar_visible(True)
+        else:
+            window.top_bar.setVisible(False)
+            connections_page.set_tab_bar_visible(False)
+            window.top_bar.navigate_to(TopBar.PAGE_CONNECTIONS)
+            window.showFullScreen()
+            window.set_fullscreen_bar_visible(True)
+
     sc_fullscreen = QShortcut(QKeySequence("F11"), window)
-    sc_fullscreen.activated.connect(
-        lambda: window.showNormal() if window.isFullScreen() else window.showFullScreen()
+    sc_fullscreen.activated.connect(_toggle_fullscreen)
+    window.fullscreen_toggled.connect(_toggle_fullscreen)
+    connections_page._tab_bar.fullscreen_requested.connect(_toggle_fullscreen)
+
+    # "+" button in tab bar → navigate to Vault to pick a host
+    connections_page._tab_bar.new_tab_requested.connect(
+        lambda: window.top_bar.navigate_to(TopBar.PAGE_VAULT)
     )
 
     # Wire settings button in top bar
@@ -192,6 +221,11 @@ def main() -> None:
         sync_engine.stop_auto_sync()
         credential_store.lock()
         vault.close()
+
+    # Initialize toast manager
+    from termplus.ui.widgets.toast import ToastManager
+
+    ToastManager.instance().set_parent(window)
 
     window.set_cleanup_callback(_cleanup)
     window.show()

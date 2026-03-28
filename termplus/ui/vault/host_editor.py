@@ -91,12 +91,18 @@ class HostEditorContent(QWidget):
         self._protocol_combo = QComboBox()
         self._protocol_combo.addItems(["ssh", "rdp", "vnc", "telnet", "serial"])
         self._add_field("Protocol", self._protocol_combo)
+        self._protocol_combo.currentTextChanged.connect(self._on_protocol_changed)
 
-        # Port
+        # Port (default value depends on protocol)
         self._port_spin = QSpinBox()
         self._port_spin.setRange(1, 65535)
         self._port_spin.setValue(22)
         self._add_field("Port", self._port_spin)
+
+        # Default ports per protocol
+        self._default_ports = {
+            "ssh": 22, "rdp": 3389, "vnc": 5900, "telnet": 23, "serial": 0,
+        }
 
         # Identity
         self._identity_combo = QComboBox()
@@ -145,20 +151,18 @@ class HostEditorContent(QWidget):
             f"font-size: 12px; color: {Colors.TEXT_SECONDARY}; background: transparent;"
         )
         self._color_row.addWidget(color_label)
+        self._color_options = ["#e94560", "#22c55e", "#3b82f6", "#f59e0b", "#7c3aed", "#ec4899"]
         self._color_buttons: list[QPushButton] = []
-        for color in ["#e94560", "#22c55e", "#3b82f6", "#f59e0b", "#7c3aed", "#ec4899"]:
+        for color in self._color_options:
             btn = QPushButton()
-            btn.setFixedSize(20, 20)
+            btn.setFixedSize(24, 24)
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            btn.setStyleSheet(
-                f"QPushButton {{ background-color: {color}; border: 2px solid transparent; "
-                f"border-radius: 10px; }}"
-                f"QPushButton:hover {{ border-color: {Colors.TEXT_PRIMARY}; }}"
-            )
+            btn.setProperty("color_value", color)
             btn.clicked.connect(lambda checked=False, c=color: self._set_color(c))
             self._color_buttons.append(btn)
             self._color_row.addWidget(btn)
         self._color_row.addStretch()
+        self._update_color_buttons(None)
         self._form_layout.addLayout(self._color_row)
 
         self._form_layout.addStretch()
@@ -216,7 +220,7 @@ class HostEditorContent(QWidget):
         self._label_edit.setText(host.label)
         self._address_edit.setText(host.address)
         self._protocol_combo.setCurrentText(host.protocol)
-        self._port_spin.setValue(host.ssh_port)
+        self._port_spin.setValue(self._get_port_for_protocol(host))
         self._keep_alive_spin.setValue(host.ssh_keep_alive)
         self._agent_fwd_check.setChecked(host.ssh_agent_forwarding)
         self._compression_check.setChecked(host.ssh_compression)
@@ -250,6 +254,7 @@ class HostEditorContent(QWidget):
         self._compression_check.blockSignals(False)
         self._group_combo.blockSignals(False)
 
+        self._update_color_buttons(host.color_label)
         self._save_indicator.setText("")
 
     def _populate_identities(self) -> None:
@@ -306,7 +311,7 @@ class HostEditorContent(QWidget):
         self._host.label = self._label_edit.text()
         self._host.address = self._address_edit.text()
         self._host.protocol = self._protocol_combo.currentText()
-        self._host.ssh_port = self._port_spin.value()
+        self._set_port_for_protocol(self._host, self._port_spin.value())
         self._host.ssh_keep_alive = self._keep_alive_spin.value()
         self._host.ssh_agent_forwarding = self._agent_fwd_check.isChecked()
         self._host.ssh_compression = self._compression_check.isChecked()
@@ -326,7 +331,58 @@ class HostEditorContent(QWidget):
     def _set_color(self, color: str) -> None:
         if self._host:
             self._host.color_label = color
+            self._update_color_buttons(color)
             self._schedule_save()
+
+    def _update_color_buttons(self, active_color: str | None = None) -> None:
+        for btn in self._color_buttons:
+            c = btn.property("color_value")
+            if c == active_color:
+                btn.setStyleSheet(
+                    f"QPushButton {{ background-color: {c}; "
+                    f"border: 3px solid {Colors.TEXT_PRIMARY}; border-radius: 12px; }}"
+                )
+            else:
+                btn.setStyleSheet(
+                    f"QPushButton {{ background-color: {c}; "
+                    f"border: 2px solid transparent; border-radius: 12px; }}"
+                    f"QPushButton:hover {{ border-color: {Colors.TEXT_PRIMARY}; }}"
+                )
+
+    def _on_protocol_changed(self, protocol: str) -> None:
+        """Update the port default when the protocol selection changes."""
+        if self._host is not None:
+            current_port = self._get_port_for_protocol(self._host)
+            # If port is still at old default, switch to new protocol's default
+            old_protocol_default = self._default_ports.get(self._host.protocol, 22)
+            if current_port == old_protocol_default:
+                new_default = self._default_ports.get(protocol, 22)
+                self._port_spin.blockSignals(True)
+                self._port_spin.setValue(new_default)
+                self._port_spin.blockSignals(False)
+
+    @staticmethod
+    def _get_port_for_protocol(host: Host) -> int:
+        proto = host.protocol
+        if proto == "vnc":
+            return host.vnc_port
+        if proto == "rdp":
+            return host.rdp_port
+        if proto == "telnet":
+            return host.telnet_port
+        return host.ssh_port
+
+    @staticmethod
+    def _set_port_for_protocol(host: Host, port: int) -> None:
+        proto = host.protocol
+        if proto == "vnc":
+            host.vnc_port = port
+        elif proto == "rdp":
+            host.rdp_port = port
+        elif proto == "telnet":
+            host.telnet_port = port
+        else:
+            host.ssh_port = port
 
     def _on_connect(self) -> None:
         if self._host and self._host.id:

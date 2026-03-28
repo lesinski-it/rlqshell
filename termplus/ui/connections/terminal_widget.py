@@ -406,6 +406,8 @@ class TerminalWidget(QWidget):
         self._recompute_size()
 
     def _recompute_size(self) -> None:
+        if self.width() < 10 or self.height() < 10:
+            return  # skip resize during reparenting (avoids clearing pyte buffer)
         new_cols = max(1, int(self.width() / self._cell_width))
         new_rows = max(1, int(self.height() / self._cell_height))
         if new_cols != self._cols or new_rows != self._rows:

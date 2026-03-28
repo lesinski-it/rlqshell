@@ -216,9 +216,14 @@ class TransferQueue(QWidget):
                 else:
                     await sftp.upload(local_path, remote_path)
                 item.mark_complete()
+            except PermissionError:
+                logger.error("Transfer %s failed: permission denied", transfer_id)
+                item.mark_error("Permission denied")
+                self._show_error(f"Permission denied: {local_path.split('/')[-1]}")
             except Exception as exc:
                 logger.exception("Transfer %s failed", transfer_id)
                 item.mark_error(str(exc)[:30])
+                self._show_error(f"Transfer failed: {exc}")
 
         self._update_title()
 
@@ -241,6 +246,11 @@ class TransferQueue(QWidget):
     def _toggle(self) -> None:
         self._collapsed = not self._collapsed
         self._scroll.setVisible(not self._collapsed)
+
+    def _show_error(self, message: str) -> None:
+        from termplus.ui.widgets.toast import ToastManager
+
+        ToastManager.instance().show_toast(message, "error", duration_ms=5000)
 
     def _update_title(self) -> None:
         count = len(self._transfers)
