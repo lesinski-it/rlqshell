@@ -12,20 +12,13 @@ logger = logging.getLogger(__name__)
 
 def main() -> None:
     """Launch the Termplus application."""
-    # Must import PySide6 before qasync
+    # Only the bare minimum before showing the splash: QApplication must exist first
     from termplus.app.application import TermplusApplication
-    from termplus.ui.main_window import MainWindow
-    from termplus.utils.logger import setup_logging
-
-    app = TermplusApplication(sys.argv)
-    setup_logging(app.config.log_dir)
-
-    logger.info("Starting Termplus…")
-
-    # Show splash screen as early as possible
-    from PySide6.QtWidgets import QApplication
     from termplus.app.constants import APP_VERSION
     from termplus.ui.splash_screen import SplashScreen
+    from PySide6.QtWidgets import QApplication
+
+    app = TermplusApplication(sys.argv)
 
     _SPLASH_MIN_SECS = 5.0
 
@@ -34,6 +27,13 @@ def main() -> None:
     splash.raise_()
     QApplication.processEvents()
     _splash_shown_at = time.monotonic()
+
+    # Now it's safe to do everything else
+    from termplus.utils.logger import setup_logging
+    setup_logging(app.config.log_dir)
+
+    logger.info("Starting Termplus…")
+
     splash.update_progress(5, "Loading theme…")
 
     # Apply theme
@@ -107,6 +107,7 @@ def main() -> None:
         app.config.data_dir, sync_state, ConflictResolver(),
     )
 
+    from termplus.ui.main_window import MainWindow
     window = MainWindow()
 
     # Install real Vault page
