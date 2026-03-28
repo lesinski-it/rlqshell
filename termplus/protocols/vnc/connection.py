@@ -62,8 +62,8 @@ class VNCConnection(AbstractConnection):
             await loop.run_in_executor(None, self._do_connect)
             self.connected.emit()
         except Exception as exc:
-            logger.exception("VNC connection failed: %s", exc)
-            self.error.emit(str(exc))
+            logger.exception("VNC connection to %s:%d failed: %s", self._hostname, self._port, exc)
+            self.error.emit(f"Connection to {self._hostname}:{self._port} failed: {exc}")
             raise
 
     # ------------------------------------------------------------------
@@ -87,6 +87,14 @@ class VNCConnection(AbstractConnection):
 
     def _do_connect(self) -> None:
         """Blocking RFB 3.8 handshake (runs in thread-pool)."""
+        # Handle "host:port" in the hostname field
+        if ":" in self._hostname:
+            parts = self._hostname.rsplit(":", 1)
+            if parts[1].isdigit():
+                self._hostname = parts[0]
+                self._port = int(parts[1])
+
+        logger.info("VNC connecting to %s:%d", self._hostname, self._port)
         sock = socket.create_connection((self._hostname, self._port), timeout=15)
         sock.settimeout(5)
         self._sock = sock
@@ -301,7 +309,8 @@ class VNCConnection(AbstractConnection):
             self._width * 4,
             QImage.Format.Format_RGB32,
         )
-        self.frame_updated.emit(img)
+        # Must copy — the bytes buffer is temporary and QImage only holds a pointer
+        self.frame_updated.emit(img.copy())
 
     # ------------------------------------------------------------------
     # Client → Server messages

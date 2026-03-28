@@ -5,14 +5,16 @@ from __future__ import annotations
 import asyncio
 import logging
 import threading
-from io import BytesIO
 
 from PySide6.QtCore import Signal
-from PySide6.QtGui import QImage
+from PySide6.QtGui import QImage, QPainter
 
 from termplus.protocols.base import AbstractConnection
 
 logger = logging.getLogger(__name__)
+
+# Target frame interval (~30 FPS cap)
+_MIN_FRAME_INTERVAL = 1.0 / 30
 
 
 class RDPConnection(AbstractConnection):
@@ -45,7 +47,7 @@ class RDPConnection(AbstractConnection):
         self._rdp = None  # aardwolf RDPConnection
         self._connected = False
         self._stop_event = threading.Event()
-        self._reader_thread: threading.Thread | None = None
+        self._desktop_image: QImage | None = None
 
     @property
     def is_connected(self) -> bool:
@@ -63,6 +65,13 @@ class RDPConnection(AbstractConnection):
 
     async def _do_connect(self) -> None:
         """Establish RDP connection using aardwolf."""
+        # Handle "host:port" in the hostname field
+        if ":" in self._hostname:
+            parts = self._hostname.rsplit(":", 1)
+            if parts[1].isdigit():
+                self._hostname = parts[0]
+                self._port = int(parts[1])
+
         from aardwolf.commons.iosettings import RDPIOSettings
         from aardwolf.commons.queuedata.constants import VIDEO_FORMAT
         from aardwolf.commons.target import RDPTarget
@@ -112,6 +121,10 @@ class RDPConnection(AbstractConnection):
         if err is not None:
             raise ConnectionError(f"RDP connect failed: {err}")
 
+        # Prepare desktop buffer
+        self._desktop_image = QImage(width, height, QImage.Format.Format_RGB32)
+        self._desktop_image.fill(0xFF000000)
+
         self.title_changed.emit(f"RDP: {self._hostname}")
 
         # Start reading desktop updates
@@ -120,22 +133,36 @@ class RDPConnection(AbstractConnection):
 
     async def _read_loop(self) -> None:
         """Read desktop bitmap updates from aardwolf's ext_out_queue."""
-        from aardwolf.commons.queuedata.constants import RDPDATATYPE
+        from aardwolf.commons.queuedata import RDPDATATYPE
+
+        frame_dirty = False
+        last_emit = 0.0
 
         try:
             while not self._stop_event.is_set():
                 try:
                     data = await asyncio.wait_for(
-                        self._rdp.ext_out_queue.get(), timeout=0.5,
+                        self._rdp.ext_out_queue.get(), timeout=0.05,
                     )
                 except asyncio.TimeoutError:
+                    # Flush pending frame on idle
+                    if frame_dirty:
+                        self._flush_frame()
+                        frame_dirty = False
                     continue
 
                 if data is None:
                     break
 
                 if data.type == RDPDATATYPE.VIDEO:
-                    self._emit_frame()
+                    self._apply_rect(data)
+                    now = asyncio.get_event_loop().time()
+                    if now - last_emit >= _MIN_FRAME_INTERVAL:
+                        self._flush_frame()
+                        last_emit = now
+                        frame_dirty = False
+                    else:
+                        frame_dirty = True
 
         except Exception as exc:
             if not self._stop_event.is_set():
@@ -145,28 +172,31 @@ class RDPConnection(AbstractConnection):
             self._connected = False
             self.disconnected.emit()
 
-    def _emit_frame(self) -> None:
-        """Convert aardwolf desktop buffer to QImage and emit."""
-        if not self._rdp:
+    def _apply_rect(self, video_data) -> None:
+        """Paint a rectangle update onto the persistent desktop buffer."""
+        if self._desktop_image is None:
+            return
+        pil_rect = video_data.data
+        if pil_rect is None:
             return
         try:
-            from aardwolf.commons.queuedata.constants import VIDEO_FORMAT
-
-            pil_image = self._rdp.get_desktop_buffer(VIDEO_FORMAT.PIL)
-            if pil_image is None:
-                return
-
-            # Convert PIL Image -> QImage via raw RGBA bytes
-            rgba = pil_image.convert("RGBA")
-            data = rgba.tobytes("raw", "BGRA")
-            qimg = QImage(
-                data, rgba.width, rgba.height,
+            rgba = pil_rect.convert("RGBA")
+            raw = rgba.tobytes("raw", "BGRA")
+            rect_img = QImage(
+                raw, rgba.width, rgba.height,
                 rgba.width * 4, QImage.Format.Format_RGB32,
             )
-            # Must copy because data buffer is temporary
-            self.frame_updated.emit(qimg.copy())
+            painter = QPainter(self._desktop_image)
+            painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_Source)
+            painter.drawImage(video_data.x, video_data.y, rect_img)
+            painter.end()
         except Exception:
-            logger.debug("Frame conversion error", exc_info=True)
+            logger.debug("Rect apply error", exc_info=True)
+
+    def _flush_frame(self) -> None:
+        """Emit the current desktop buffer as a frame."""
+        if self._desktop_image is not None and not self._desktop_image.isNull():
+            self.frame_updated.emit(self._desktop_image.copy())
 
     # ------------------------------------------------------------------
     # Keyboard / Mouse input
@@ -209,4 +239,5 @@ class RDPConnection(AbstractConnection):
             except Exception:
                 pass
             self._rdp = None
+        self._desktop_image = None
         logger.info("RDP connection closed (%s)", self._hostname)

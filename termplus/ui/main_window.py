@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import logging
 
-from PySide6.QtCore import QSize, Qt, QTimer, Signal
+from PySide6.QtCore import QEasingCurve, QPropertyAnimation, QSize, Qt, QTimer, Signal
 from PySide6.QtWidgets import (
+    QGraphicsOpacityEffect,
     QHBoxLayout,
     QLabel,
     QMainWindow,
@@ -79,6 +80,24 @@ class MainWindow(QMainWindow):
         fs_layout.addWidget(fs_exit_btn)
         fs_layout.addStretch()
         self._fs_bar.setVisible(False)
+
+        # Fade-out effect for fullscreen bar
+        self._fs_opacity = QGraphicsOpacityEffect(self._fs_bar)
+        self._fs_opacity.setOpacity(1.0)
+        self._fs_bar.setGraphicsEffect(self._fs_opacity)
+
+        self._fs_fade_anim = QPropertyAnimation(self._fs_opacity, b"opacity")
+        self._fs_fade_anim.setDuration(600)
+        self._fs_fade_anim.setStartValue(1.0)
+        self._fs_fade_anim.setEndValue(0.0)
+        self._fs_fade_anim.setEasingCurve(QEasingCurve.Type.InQuad)
+        self._fs_fade_anim.finished.connect(lambda: self._fs_bar.setVisible(False))
+
+        self._fs_hide_timer = QTimer(self)
+        self._fs_hide_timer.setSingleShot(True)
+        self._fs_hide_timer.setInterval(5000)
+        self._fs_hide_timer.timeout.connect(self._fs_fade_anim.start)
+
         main_layout.addWidget(self._fs_bar)
 
         # Top navigation bar
@@ -145,8 +164,15 @@ class MainWindow(QMainWindow):
         logger.debug("Switched to page %d", index)
 
     def set_fullscreen_bar_visible(self, visible: bool) -> None:
-        """Show or hide the fullscreen hint bar."""
-        self._fs_bar.setVisible(visible)
+        """Show or hide the fullscreen hint bar (auto-fades after 5 s)."""
+        self._fs_hide_timer.stop()
+        self._fs_fade_anim.stop()
+        if visible:
+            self._fs_opacity.setOpacity(1.0)
+            self._fs_bar.setVisible(True)
+            self._fs_hide_timer.start()
+        else:
+            self._fs_bar.setVisible(False)
 
     def _on_settings_requested(self) -> None:
         logger.info("Settings requested — dialog coming in Stage 8")

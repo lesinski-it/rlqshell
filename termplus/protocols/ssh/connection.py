@@ -118,6 +118,13 @@ class SSHConnection(AbstractConnection):
 
     def _do_connect(self) -> None:
         """Blocking connect (runs in thread pool)."""
+        # Handle "host:port" in the hostname field
+        if ":" in self._hostname:
+            parts = self._hostname.rsplit(":", 1)
+            if parts[1].isdigit():
+                self._hostname = parts[0]
+                self._port = int(parts[1])
+
         client = paramiko.SSHClient()
         if self._host_key_callback:
             policy = _InteractiveHostKeyPolicy(

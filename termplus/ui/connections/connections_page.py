@@ -29,6 +29,7 @@ from termplus.ui.connections.tab_bar import ConnectionTabBar
 from termplus.ui.connections.terminal_widget import TerminalWidget
 from termplus.ui.dialogs.host_key_dialog import HostKeyDialog
 from termplus.ui.widgets.empty_state import EmptyState
+from termplus.ui.widgets.remote_control_panel import RemoteDesktopContainer
 
 logger = logging.getLogger(__name__)
 
@@ -179,22 +180,23 @@ class ConnectionsPage(QWidget):
         )
 
         vnc_widget = VNCWidget(conn)
-        self._terminal_stack.addWidget(vnc_widget)
+        container = RemoteDesktopContainer(vnc_widget, conn, "vnc")
+        self._terminal_stack.addWidget(container)
 
-        conn.connected.connect(vnc_widget.clear_overlay)
+        conn.connected.connect(container.clear_overlay)
         conn.disconnected.connect(lambda tid=tab_id: self._on_disconnected(tid))
         conn.error.connect(lambda msg, tid=tab_id: self._on_error(tid, msg))
 
-        self._sessions[tab_id] = (vnc_widget, conn)
+        self._sessions[tab_id] = (container, conn)
         self._pool.add(tab_id, conn)
 
         self._tab_bar.add_tab(
             tab_id, label, protocol="VNC", color=host.color_label,
         )
-        self._terminal_stack.setCurrentWidget(vnc_widget)
-        vnc_widget.setFocus()
+        self._terminal_stack.setCurrentWidget(container)
+        container.setFocus()
 
-        vnc_widget.show_overlay(f"Connecting to {host.address}:{host.vnc_port}...")
+        container.show_overlay(f"Connecting to {host.address}:{host.vnc_port}...")
         asyncio.ensure_future(self._connect_async(tab_id, conn, host))
 
     def _open_rdp(self, host: Host) -> None:
@@ -236,22 +238,23 @@ class ConnectionsPage(QWidget):
         )
 
         rdp_widget = RDPWidget(conn)
-        self._terminal_stack.addWidget(rdp_widget)
+        container = RemoteDesktopContainer(rdp_widget, conn, "rdp")
+        self._terminal_stack.addWidget(container)
 
-        conn.connected.connect(rdp_widget.clear_overlay)
+        conn.connected.connect(container.clear_overlay)
         conn.disconnected.connect(lambda tid=tab_id: self._on_disconnected(tid))
         conn.error.connect(lambda msg, tid=tab_id: self._on_error(tid, msg))
 
-        self._sessions[tab_id] = (rdp_widget, conn)
+        self._sessions[tab_id] = (container, conn)
         self._pool.add(tab_id, conn)
 
         self._tab_bar.add_tab(
             tab_id, label, protocol="RDP", color=host.color_label,
         )
-        self._terminal_stack.setCurrentWidget(rdp_widget)
-        rdp_widget.setFocus()
+        self._terminal_stack.setCurrentWidget(container)
+        container.setFocus()
 
-        rdp_widget.show_overlay(f"Connecting to {host.address}:{host.rdp_port}...")
+        container.show_overlay(f"Connecting to {host.address}:{host.rdp_port}...")
         asyncio.ensure_future(self._connect_async(tab_id, conn, host))
 
     async def _connect_async(
@@ -268,11 +271,14 @@ class ConnectionsPage(QWidget):
                 )
                 self._history_records[tab_id] = rec_id
         except Exception as exc:
-            logger.error("Connection %s failed: %s", tab_id, exc)
+            logger.error("Connection %s to %s failed: %s", tab_id, host.address, exc)
             session = self._sessions.get(tab_id)
             if session:
                 widget, _ = session
-                widget.show_overlay(f"Connection failed: {exc}", color=Colors.DANGER)  # type: ignore[union-attr]
+                widget.show_overlay(
+                    f"Connection to {host.address} failed: {exc}",
+                    color=Colors.DANGER,
+                )  # type: ignore[union-attr]
 
     def _verify_host_key(
         self, hostname: str, port: int, key_type: str, fingerprint: str,
