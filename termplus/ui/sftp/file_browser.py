@@ -94,15 +94,14 @@ class FileBrowser(QWidget):
         tb_layout.addWidget(mkdir_btn)
 
         upload_btn = QPushButton("Upload")
-        upload_btn.setProperty("cssClass", "primary")
         upload_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         upload_btn.clicked.connect(self._on_upload)
         tb_layout.addWidget(upload_btn)
 
-        hidden_btn = QPushButton("Toggle Hidden")
-        hidden_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        hidden_btn.clicked.connect(self._toggle_hidden)
-        tb_layout.addWidget(hidden_btn)
+        self._hidden_btn = QPushButton("Show Hidden")
+        self._hidden_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._hidden_btn.clicked.connect(self._toggle_hidden)
+        tb_layout.addWidget(self._hidden_btn)
 
         layout.addWidget(toolbar)
 
@@ -121,6 +120,7 @@ class FileBrowser(QWidget):
         self._table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self._table.customContextMenuRequested.connect(self._show_context_menu)
         self._table.cellDoubleClicked.connect(self._on_double_click)
+        self._table.keyPressEvent = self._on_table_key_press
         self._table.setStyleSheet(
             f"QTableWidget {{ gridline-color: {Colors.BORDER}; }}"
         )
@@ -174,6 +174,14 @@ class FileBrowser(QWidget):
             # Permissions
             self._table.setItem(row, 3, QTableWidgetItem(entry.permissions))
 
+    def _on_table_key_press(self, event) -> None:
+        if event.key() == Qt.Key.Key_Delete:
+            entries = self._selected_entries()
+            if entries:
+                self._delete_entries(entries)
+        else:
+            QTableWidget.keyPressEvent(self._table, event)
+
     def _on_double_click(self, row: int, col: int) -> None:
         item = self._table.item(row, 0)
         if not item:
@@ -181,6 +189,8 @@ class FileBrowser(QWidget):
         entry: FileEntry = item.data(Qt.ItemDataRole.UserRole)
         if entry.is_dir:
             asyncio.ensure_future(self.navigate(entry.path))
+        else:
+            self._edit_file(entry)
 
     def _go_up(self) -> None:
         asyncio.ensure_future(self.navigate(".."))
@@ -190,6 +200,7 @@ class FileBrowser(QWidget):
 
     def _toggle_hidden(self) -> None:
         self._show_hidden = not self._show_hidden
+        self._hidden_btn.setText("Hide Hidden" if self._show_hidden else "Show Hidden")
         self._populate_table()
 
     def _on_mkdir(self) -> None:
@@ -217,6 +228,20 @@ class FileBrowser(QWidget):
                 remote = f"{self._sftp.cwd}/{filename}"
                 self.transfer_requested.emit("upload", local, remote)
 
+    def _selected_entries(self) -> list[FileEntry]:
+        """Return all currently selected entries."""
+        seen_rows: set[int] = set()
+        entries: list[FileEntry] = []
+        for sel_item in self._table.selectedItems():
+            row = sel_item.row()
+            if row in seen_rows:
+                continue
+            seen_rows.add(row)
+            name_item = self._table.item(row, 0)
+            if name_item:
+                entries.append(name_item.data(Qt.ItemDataRole.UserRole))
+        return entries
+
     def _show_context_menu(self, pos) -> None:
         item = self._table.itemAt(pos)
         if not item:
@@ -226,10 +251,12 @@ class FileBrowser(QWidget):
         if not name_item:
             return
         entry: FileEntry = name_item.data(Qt.ItemDataRole.UserRole)
+        selected = self._selected_entries()
+        multi = len(selected) > 1
 
         menu = QMenu(self)
 
-        if not entry.is_dir:
+        if not multi and not entry.is_dir:
             edit_action = menu.addAction("Edit")
             edit_action.triggered.connect(lambda: self._edit_file(entry))
 
@@ -238,13 +265,14 @@ class FileBrowser(QWidget):
 
             menu.addSeparator()
 
-        rename_action = menu.addAction("Rename")
-        rename_action.triggered.connect(lambda: self._rename_entry(entry))
+        if not multi:
+            rename_action = menu.addAction("Rename")
+            rename_action.triggered.connect(lambda: self._rename_entry(entry))
+            menu.addSeparator()
 
-        menu.addSeparator()
-
-        del_action = menu.addAction("Delete")
-        del_action.triggered.connect(lambda: self._delete_entry(entry))
+        del_label = f"Delete ({len(selected)})" if multi else "Delete"
+        del_action = menu.addAction(del_label)
+        del_action.triggered.connect(lambda: self._delete_entries(selected))
 
         menu.exec(self._table.viewport().mapToGlobal(pos))
 
@@ -291,26 +319,32 @@ class FileBrowser(QWidget):
             logger.exception("Rename failed: %s → %s", old_path, new_path)
             self._show_error(f"Rename failed: {exc}")
 
-    def _delete_entry(self, entry: FileEntry) -> None:
+    def _delete_entries(self, entries: list[FileEntry]) -> None:
         from PySide6.QtWidgets import QMessageBox
 
+        if len(entries) == 1:
+            e = entries[0]
+            msg = f"Delete {'directory' if e.is_dir else 'file'} '{e.name}'?"
+        else:
+            msg = f"Delete {len(entries)} selected items?"
+
         reply = QMessageBox.question(
-            self, "Delete",
-            f"Delete {'directory' if entry.is_dir else 'file'} '{entry.name}'?",
+            self, "Delete", msg,
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
         )
         if reply == QMessageBox.StandardButton.Yes:
-            asyncio.ensure_future(self._do_delete(entry))
+            asyncio.ensure_future(self._do_delete_entries(entries))
 
-    async def _do_delete(self, entry: FileEntry) -> None:
-        try:
-            if entry.is_dir:
-                await self._sftp.rmdir(entry.path)
-            else:
-                await self._sftp.delete(entry.path)
-            await self.navigate()
-        except PermissionError:
-            self._show_error(f"Permission denied: cannot delete '{entry.name}'")
-        except Exception as exc:
-            logger.exception("Delete failed: %s", entry.path)
-            self._show_error(f"Delete failed: {exc}")
+    async def _do_delete_entries(self, entries: list[FileEntry]) -> None:
+        for entry in entries:
+            try:
+                if entry.is_dir:
+                    await self._sftp.rmdir(entry.path)
+                else:
+                    await self._sftp.delete(entry.path)
+            except PermissionError:
+                self._show_error(f"Permission denied: cannot delete '{entry.name}'")
+            except Exception as exc:
+                logger.exception("Delete failed: %s", entry.path)
+                self._show_error(f"Delete failed: {exc}")
+        await self.navigate()

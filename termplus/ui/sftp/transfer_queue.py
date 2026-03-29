@@ -22,9 +22,6 @@ from termplus.protocols.ssh.sftp_session import SFTPSession
 
 logger = logging.getLogger(__name__)
 
-# Max concurrent transfers
-_MAX_CONCURRENT = 3
-
 
 class _TransferItem(QWidget):
     """Single transfer progress row."""
@@ -75,13 +72,15 @@ class _TransferItem(QWidget):
         layout.addWidget(self._status)
 
         # Cancel button
-        cancel_btn = QPushButton("✕")
-        cancel_btn.setFixedSize(20, 20)
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.setFixedHeight(22)
         cancel_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        cancel_btn.setToolTip("Cancel transfer")
         cancel_btn.setStyleSheet(
-            f"QPushButton {{ font-size: 11px; color: {Colors.TEXT_MUTED}; "
-            f"background: transparent; border: none; border-radius: 3px; }}"
-            f"QPushButton:hover {{ background-color: {Colors.DANGER}; color: white; }}"
+            f"QPushButton {{ font-size: 10px; color: {Colors.TEXT_SECONDARY}; "
+            f"background-color: {Colors.BG_HOVER}; border: 1px solid {Colors.BORDER}; border-radius: 3px; "
+            f"padding: 0 6px; }}"
+            f"QPushButton:hover {{ background-color: {Colors.DANGER}; color: white; border-color: {Colors.DANGER}; }}"
         )
         cancel_btn.clicked.connect(lambda: self.cancel_requested.emit(self._transfer_id))
         layout.addWidget(cancel_btn)
@@ -110,10 +109,15 @@ class _TransferItem(QWidget):
 class TransferQueue(QWidget):
     """Collapsible panel showing active transfers."""
 
+    upload_completed = Signal(object)  # SFTPSession — emitted after successful upload
+
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._collapsed = True
-        self._semaphore = asyncio.Semaphore(_MAX_CONCURRENT)
+        # Per-session locks: only 1 active transfer per SFTPSession (paramiko is not thread-safe)
+        self._session_locks: dict[int, asyncio.Lock] = {}
+        # Pending upload count per session — refresh only after last upload finishes
+        self._pending_uploads: dict[int, int] = {}
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -136,6 +140,27 @@ class TransferQueue(QWidget):
             f"background: transparent;"
         )
         h_layout.addWidget(self._title)
+
+        # Global progress bar (visible only during active transfers)
+        self._global_progress = QProgressBar()
+        self._global_progress.setFixedSize(160, 12)
+        self._global_progress.setMaximum(100)
+        self._global_progress.setValue(0)
+        self._global_progress.setTextVisible(False)
+        self._global_progress.setStyleSheet(
+            f"QProgressBar {{ background-color: {Colors.BG_HOVER}; border: none; border-radius: 6px; }}"
+            f"QProgressBar::chunk {{ background-color: {Colors.ACCENT}; border-radius: 6px; }}"
+        )
+        self._global_progress.setVisible(False)
+        h_layout.addWidget(self._global_progress)
+
+        self._global_pct_label = QLabel("")
+        self._global_pct_label.setStyleSheet(
+            f"font-size: 11px; color: {Colors.ACCENT_LIGHT}; background: transparent; min-width: 36px;"
+        )
+        self._global_pct_label.setVisible(False)
+        h_layout.addWidget(self._global_pct_label)
+
         h_layout.addStretch()
 
         clear_btn = QPushButton("Clear")
@@ -167,6 +192,10 @@ class TransferQueue(QWidget):
 
         self._transfers: dict[str, _TransferItem] = {}
         self._scroll.setVisible(False)
+        self._active_count = 0      # currently running transfers
+        self._total_count = 0       # total in current batch (resets when all done)
+        self._done_count = 0        # completed in current batch
+        self._current_file_pct = 0  # progress of the currently active file (0-100)
 
     def add_transfer(
         self,
@@ -189,6 +218,14 @@ class TransferQueue(QWidget):
         if not self._collapsed:
             self._scroll.setVisible(True)
 
+        if direction == "upload":
+            session_key = id(sftp)
+            self._pending_uploads[session_key] = self._pending_uploads.get(session_key, 0) + 1
+
+        self._active_count += 1
+        self._total_count += 1
+        self._update_global_progress()
+
         # Start the transfer task
         asyncio.ensure_future(
             self._run_transfer(transfer_id, sftp, direction, local_path, remote_path)
@@ -208,14 +245,34 @@ class TransferQueue(QWidget):
         if not item:
             return
 
-        async with self._semaphore:
+        session_key = id(sftp)
+        if session_key not in self._session_locks:
+            self._session_locks[session_key] = asyncio.Lock()
+
+        async with self._session_locks[session_key]:
             item.set_status("Transferring")
+            loop = asyncio.get_running_loop()
+
+            def _progress(transferred: int, total: int) -> None:
+                if total > 0:
+                    pct = int(transferred / total * 100)
+                    def _update(p=pct):
+                        item.set_progress(p)
+                        self._current_file_pct = p
+                        self._update_global_progress()
+                    loop.call_soon_threadsafe(_update)
+
             try:
                 if direction == "download":
-                    await sftp.download(remote_path, local_path)
+                    await sftp.download(remote_path, local_path, _progress)
                 else:
-                    await sftp.upload(local_path, remote_path)
+                    await sftp.upload(local_path, remote_path, _progress)
                 item.mark_complete()
+                if direction == "upload":
+                    session_key = id(sftp)
+                    self._pending_uploads[session_key] = max(0, self._pending_uploads.get(session_key, 1) - 1)
+                    if self._pending_uploads[session_key] == 0:
+                        self.upload_completed.emit(sftp)
             except PermissionError:
                 logger.error("Transfer %s failed: permission denied", transfer_id)
                 item.mark_error("Permission denied")
@@ -224,6 +281,11 @@ class TransferQueue(QWidget):
                 logger.exception("Transfer %s failed", transfer_id)
                 item.mark_error(str(exc)[:30])
                 self._show_error(f"Transfer failed: {exc}")
+            finally:
+                self._active_count = max(0, self._active_count - 1)
+                self._done_count += 1
+                self._current_file_pct = 0
+                self._update_global_progress()
 
         self._update_title()
 
@@ -251,6 +313,24 @@ class TransferQueue(QWidget):
         from termplus.ui.widgets.toast import ToastManager
 
         ToastManager.instance().show_toast(message, "error", duration_ms=5000)
+
+    def _update_global_progress(self) -> None:
+        if self._active_count == 0:
+            self._global_progress.setVisible(False)
+            self._global_pct_label.setVisible(False)
+            self._total_count = 0
+            self._done_count = 0
+            self._current_file_pct = 0
+        else:
+            # Include fractional progress of current file
+            effective = self._done_count + self._current_file_pct / 100
+            pct = int(effective / self._total_count * 100) if self._total_count else 0
+            self._global_progress.setValue(pct)
+            self._global_pct_label.setText(
+                f"{self._done_count}/{self._total_count}  {pct}%"
+            )
+            self._global_progress.setVisible(True)
+            self._global_pct_label.setVisible(True)
 
     def _update_title(self) -> None:
         count = len(self._transfers)

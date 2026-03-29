@@ -158,6 +158,9 @@ def main() -> None:
         vault.hosts, credential_store, keychain, connection_pool,
     )
     window.set_sftp_page(sftp_page)
+    sftp_page.new_session_requested.connect(
+        lambda: window.top_bar.navigate_to(TopBar.PAGE_VAULT)
+    )
 
     # Update connection badge in top bar
     connections_page.connection_count_changed.connect(
@@ -260,6 +263,16 @@ def main() -> None:
     window.set_cleanup_callback(_cleanup)
 
     window.show()
+
+    screen = app.primaryScreen().availableGeometry()
+    margin = 40
+    new_w = min(window.width(), screen.width() - margin * 2)
+    new_h = min(window.height(), screen.height() - margin * 2)
+    window.resize(new_w, new_h)
+    window.move(
+        screen.x() + (screen.width() - new_w) // 2,
+        screen.y() + (screen.height() - new_h) // 2,
+    )
 
     with loop:
         loop.run_forever()

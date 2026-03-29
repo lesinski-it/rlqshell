@@ -7,6 +7,7 @@ import getpass
 import logging
 import uuid
 
+from PySide6.QtCore import Signal
 from PySide6.QtWidgets import QStackedWidget, QVBoxLayout, QWidget
 
 from termplus.core.connection_pool import ConnectionPool
@@ -20,12 +21,15 @@ from termplus.ui.connections.tab_bar import ConnectionTabBar
 from termplus.ui.sftp.file_browser import FileBrowser
 from termplus.ui.sftp.transfer_queue import TransferQueue
 from termplus.ui.widgets.empty_state import EmptyState
+from termplus.ui.widgets.toast import ToastManager
 
 logger = logging.getLogger(__name__)
 
 
 class SFTPPage(QWidget):
     """Page managing tabbed SFTP sessions."""
+
+    new_session_requested = Signal()
 
     def __init__(
         self,
@@ -49,6 +53,7 @@ class SFTPPage(QWidget):
         self._tab_bar = ConnectionTabBar()
         self._tab_bar.tab_selected.connect(self._on_tab_selected)
         self._tab_bar.tab_close_requested.connect(self._on_tab_close)
+        self._tab_bar.new_tab_requested.connect(self.new_session_requested.emit)
         layout.addWidget(self._tab_bar)
 
         # Browser stack
@@ -65,40 +70,48 @@ class SFTPPage(QWidget):
 
         # Transfer queue
         self._transfer_queue = TransferQueue()
+        self._transfer_queue.upload_completed.connect(self._on_upload_completed)
         layout.addWidget(self._transfer_queue)
 
-        # Track sessions: tab_id → (browser, sftp_session, ssh_connection)
-        self._sessions: dict[str, tuple[FileBrowser, SFTPSession, SSHConnection]] = {}
+        # Track sessions: tab_id → (browser, sftp_session, ssh_connection, owns_conn)
+        # owns_conn=True means this session created the SSH connection and is responsible for closing it
+        self._sessions: dict[str, tuple[FileBrowser, SFTPSession, SSHConnection, bool]] = {}
 
     def open_sftp_session(self, host_id: int) -> None:
         """Open a new SFTP session to the given host."""
-        host = self._host_manager.get_host(host_id)
-        if host is None:
-            logger.error("Host %d not found", host_id)
-            return
+        try:
+            host = self._host_manager.get_host(host_id)
+            if host is None:
+                logger.error("Host %d not found", host_id)
+                return
 
-        tab_id = str(uuid.uuid4())[:8]
-        label = host.label or host.address
+            tab_id = str(uuid.uuid4())[:8]
+            label = host.label or host.address
 
-        # Check if there's an existing SSH connection we can reuse
-        existing_conn = self._find_existing_connection(host)
-
-        asyncio.ensure_future(
-            self._open_sftp_async(tab_id, label, host, existing_conn)
-        )
+            asyncio.ensure_future(
+                self._open_sftp_async(tab_id, label, host)
+            )
+        except Exception:
+            logger.exception("Failed to schedule SFTP session for host %d", host_id)
+            ToastManager.instance().show_toast("Failed to open SFTP session.")
 
     async def _open_sftp_async(
         self,
         tab_id: str,
         label: str,
         host: Host,
-        existing_conn: SSHConnection | None,
     ) -> None:
         try:
-            if existing_conn and existing_conn.transport:
-                conn = existing_conn
+            # Only reuse connections from other SFTP sessions (same lifecycle).
+            # Never borrow from terminal connections — closing the terminal would
+            # kill the transport and break this SFTP session.
+            sftp_conn = self._find_sftp_session_connection(host)
+            if sftp_conn:
+                conn = sftp_conn
+                owns_conn = False
             else:
                 conn = await self._create_ssh_connection(host)
+                owns_conn = True
 
             if conn.transport is None:
                 logger.error("No transport for SFTP")
@@ -113,19 +126,22 @@ class SFTPPage(QWidget):
             )
             self._browser_stack.addWidget(browser)
 
-            self._sessions[tab_id] = (browser, sftp, conn)
+            self._sessions[tab_id] = (browser, sftp, conn, owns_conn)
 
-            self._tab_bar.add_tab(tab_id, label, protocol="SFTP")
+            self._tab_bar.add_tab(tab_id, label, protocol="SFTP", show_fullscreen=False)
             self._browser_stack.setCurrentWidget(browser)
 
             await browser.navigate()
             logger.info("SFTP session opened: %s", label)
 
-        except Exception:
+        except Exception as exc:
             logger.exception("Failed to open SFTP for %s", label)
+            ToastManager.instance().show_toast(
+                f"SFTP connection failed: {exc}",
+            )
 
     async def _create_ssh_connection(self, host: Host) -> SSHConnection:
-        """Create a fresh SSH connection for SFTP."""
+        """Create a fresh SSH connection for SFTP (no shell channel needed)."""
         password, pkey = self._resolve_credentials(host)
         conn = SSHConnection(
             hostname=host.address,
@@ -135,6 +151,7 @@ class SFTPPage(QWidget):
             pkey=pkey,
             keep_alive=host.ssh_keep_alive,
             compression=host.ssh_compression,
+            open_shell=False,
         )
         await conn.connect()
         return conn
@@ -160,14 +177,18 @@ class SFTPPage(QWidget):
                 return identity.username
         return getpass.getuser()
 
-    def _find_existing_connection(self, host: Host) -> SSHConnection | None:
-        """Look for a reusable SSH connection in the pool."""
-        # Simple approach: check all connections in the pool
-        for conn_id in list(vars(self._pool).get("_connections", {})):
-            conn = self._pool.get(conn_id)
+    def _on_upload_completed(self, sftp: SFTPSession) -> None:
+        """Refresh the browser that owns the completed upload's SFTP session."""
+        for browser, session, *_ in self._sessions.values():
+            if session is sftp:
+                asyncio.ensure_future(browser.navigate())
+                break
+
+    def _find_sftp_session_connection(self, host: Host) -> SSHConnection | None:
+        """Find an existing SSH connection already used by another SFTP session."""
+        for _, _, conn, _ in self._sessions.values():
             if (
-                isinstance(conn, SSHConnection)
-                and conn.is_connected
+                conn.is_connected
                 and conn._hostname == host.address
                 and conn._port == host.ssh_port
             ):
@@ -177,16 +198,21 @@ class SFTPPage(QWidget):
     def _on_tab_selected(self, tab_id: str) -> None:
         session = self._sessions.get(tab_id)
         if session:
-            browser, _, _ = session
+            browser, *_ = session
             self._browser_stack.setCurrentWidget(browser)
 
     def _on_tab_close(self, tab_id: str) -> None:
         session = self._sessions.pop(tab_id, None)
         if session:
-            browser, sftp, _ = session
+            browser, sftp, conn, owns_conn = session
             asyncio.ensure_future(sftp.close())
             self._browser_stack.removeWidget(browser)
             browser.deleteLater()
+            # Close the SSH connection only if we own it and no other tab is using it
+            if owns_conn:
+                still_used = any(s[2] is conn for s in self._sessions.values())
+                if not still_used:
+                    conn.close()
         self._tab_bar.remove_tab(tab_id)
 
         if not self._sessions:

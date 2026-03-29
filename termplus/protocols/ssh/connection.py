@@ -74,6 +74,7 @@ class SSHConnection(AbstractConnection):
         cols: int = 80,
         rows: int = 24,
         host_key_callback: HostKeyVerifyCallback | None = None,
+        open_shell: bool = True,
     ) -> None:
         super().__init__()
         self._hostname = hostname
@@ -88,6 +89,7 @@ class SSHConnection(AbstractConnection):
         self._cols = cols
         self._rows = rows
         self._host_key_callback = host_key_callback
+        self._open_shell = open_shell
 
         self._client: paramiko.SSHClient | None = None
         self._channel: paramiko.Channel | None = None
@@ -156,23 +158,24 @@ class SSHConnection(AbstractConnection):
         if self._transport and self._keep_alive > 0:
             self._transport.set_keepalive(self._keep_alive)
 
-        channel = client.invoke_shell(
-            term="xterm-256color",
-            width=self._cols,
-            height=self._rows,
-        )
-        channel.settimeout(0.1)
-
         self._client = client
-        self._channel = channel
         self._connected = True
 
-        # Start reading in a background thread
-        self._stop_event.clear()
-        self._read_thread = threading.Thread(
-            target=self._read_loop, daemon=True, name="ssh-reader"
-        )
-        self._read_thread.start()
+        if self._open_shell:
+            channel = client.invoke_shell(
+                term="xterm-256color",
+                width=self._cols,
+                height=self._rows,
+            )
+            channel.settimeout(0.1)
+            self._channel = channel
+
+            # Start reading in a background thread
+            self._stop_event.clear()
+            self._read_thread = threading.Thread(
+                target=self._read_loop, daemon=True, name="ssh-reader"
+            )
+            self._read_thread.start()
 
         logger.info(
             "SSH connected to %s@%s:%d", self._username, self._hostname, self._port

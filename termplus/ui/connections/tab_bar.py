@@ -38,6 +38,7 @@ class _TabButton(QWidget):
         label: str,
         protocol: str = "SSH",
         color: str | None = None,
+        show_fullscreen: bool = True,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -48,6 +49,7 @@ class _TabButton(QWidget):
         self._active = False
         self._hovered = False
         self._drag_start: QPoint | None = None
+        self._show_fullscreen = show_fullscreen
 
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setFixedHeight(40)
@@ -97,7 +99,8 @@ class _TabButton(QWidget):
         )
         self._fs_btn.clicked.connect(lambda: self.fullscreen_requested.emit(self._tab_id))
         self._fs_btn.setVisible(False)
-        layout.addWidget(self._fs_btn)
+        if show_fullscreen:
+            layout.addWidget(self._fs_btn)
 
         # Close button
         self._close_btn = QPushButton("\u2715")
@@ -136,13 +139,15 @@ class _TabButton(QWidget):
     def set_active(self, active: bool) -> None:
         self._active = active
         self._close_btn.setVisible(active)
-        self._fs_btn.setVisible(active)
+        if self._show_fullscreen:
+            self._fs_btn.setVisible(active)
         self._apply_style()
 
     def enterEvent(self, event: QEvent) -> None:
         self._hovered = True
         self._close_btn.setVisible(True)
-        self._fs_btn.setVisible(True)
+        if self._show_fullscreen:
+            self._fs_btn.setVisible(True)
         self._apply_style()
         super().enterEvent(event)
 
@@ -150,7 +155,8 @@ class _TabButton(QWidget):
         self._hovered = False
         if not self._active:
             self._close_btn.setVisible(False)
-            self._fs_btn.setVisible(False)
+            if self._show_fullscreen:
+                self._fs_btn.setVisible(False)
         self._apply_style()
         super().leaveEvent(event)
 
@@ -304,8 +310,9 @@ class ConnectionTabBar(QWidget):
         label: str,
         protocol: str = "SSH",
         color: str | None = None,
+        show_fullscreen: bool = True,
     ) -> None:
-        tab = _TabButton(tab_id, label, protocol, color)
+        tab = _TabButton(tab_id, label, protocol, color, show_fullscreen)
         tab.clicked.connect(self._on_tab_clicked)
         tab.close_requested.connect(self._on_tab_close)
         tab.fullscreen_requested.connect(self._on_tab_fullscreen)

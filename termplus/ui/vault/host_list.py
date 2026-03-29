@@ -264,9 +264,10 @@ class HostListWidget(QWidget):
         self.host_selected.emit(host_id)
 
     def _on_context_menu(self, host_id: int, pos) -> None:
+        host = self._host_manager.get_host(host_id)
         menu = QMenu(self)
         connect_action = menu.addAction("Connect")
-        sftp_action = menu.addAction("Open SFTP")
+        sftp_action = menu.addAction("Open SFTP") if host and host.protocol == "ssh" else None
         menu.addSeparator()
         edit_action = menu.addAction("Edit")
         duplicate_action = menu.addAction("Duplicate")
@@ -276,7 +277,7 @@ class HostListWidget(QWidget):
         action = menu.exec(pos)
         if action == connect_action:
             self.host_connect_requested.emit(host_id)
-        elif action == sftp_action:
+        elif sftp_action and action == sftp_action:
             self.sftp_requested.emit(host_id)
         elif action == edit_action:
             self.host_selected.emit(host_id)
