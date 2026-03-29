@@ -28,7 +28,7 @@ class RecoverVaultDialog(QDialog):
         super().__init__(parent)
         self._store = credential_store
 
-        self.setWindowTitle(f"{APP_NAME} — Odzyskiwanie dostępu")
+        self.setWindowTitle(f"{APP_NAME} — Recover Access")
         self.setFixedSize(440, 330)
         self.setWindowFlags(
             Qt.WindowType.Dialog
@@ -44,32 +44,32 @@ class RecoverVaultDialog(QDialog):
         layout.setContentsMargins(32, 28, 32, 24)
         layout.setSpacing(14)
 
-        title = QLabel("Odzyskiwanie dostępu do sejfu")
+        title = QLabel("Recover Vault Access")
         title.setObjectName("title")
         layout.addWidget(title)
 
         subtitle = QLabel(
-            "Podaj zapisany kod odzyskiwania oraz ustaw nowe hasło.\n"
-            "Wszystkie dane zostaną zachowane."
+            "Enter your saved recovery code and set a new password.\n"
+            "All data will be preserved."
         )
         subtitle.setObjectName("subtitle")
         subtitle.setWordWrap(True)
         layout.addWidget(subtitle)
 
         self._code_field = QLineEdit()
-        self._code_field.setPlaceholderText("Kod odzyskiwania (XXXXX-XXXXX-XXXXX-XXXXX-XXXXX)")
+        self._code_field.setPlaceholderText("Recovery code (XXXXX-XXXXX-XXXXX-XXXXX-XXXXX)")
         self._code_field.returnPressed.connect(self._on_submit)
         layout.addWidget(self._code_field)
 
         self._new_pass = QLineEdit()
         self._new_pass.setEchoMode(QLineEdit.EchoMode.Password)
-        self._new_pass.setPlaceholderText("Nowe hasło (min. 6 znaków)")
+        self._new_pass.setPlaceholderText("New password (min. 6 characters)")
         self._new_pass.returnPressed.connect(self._on_submit)
         layout.addWidget(self._new_pass)
 
         self._confirm = QLineEdit()
         self._confirm.setEchoMode(QLineEdit.EchoMode.Password)
-        self._confirm.setPlaceholderText("Potwierdź nowe hasło")
+        self._confirm.setPlaceholderText("Confirm new password")
         self._confirm.returnPressed.connect(self._on_submit)
         layout.addWidget(self._confirm)
 
@@ -84,12 +84,12 @@ class RecoverVaultDialog(QDialog):
         btn_row = QHBoxLayout()
         btn_row.addStretch()
 
-        cancel_btn = QPushButton("Anuluj")
+        cancel_btn = QPushButton("Cancel")
         cancel_btn.setObjectName("cancelBtn")
         cancel_btn.clicked.connect(self.reject)
         btn_row.addWidget(cancel_btn)
 
-        self._submit_btn = QPushButton("Odzyskaj dostęp")
+        self._submit_btn = QPushButton("Recover Access")
         self._submit_btn.setObjectName("submitBtn")
         self._submit_btn.setDefault(True)
         self._submit_btn.clicked.connect(self._on_submit)
@@ -159,17 +159,17 @@ class RecoverVaultDialog(QDialog):
         confirm = self._confirm.text()
 
         if not code:
-            self._show_error("Podaj kod odzyskiwania.")
+            self._show_error("Enter the recovery code.")
             return
         if len(new_pass) < 6:
-            self._show_error("Nowe hasło musi mieć co najmniej 6 znaków.")
+            self._show_error("New password must be at least 6 characters.")
             return
         if new_pass != confirm:
-            self._show_error("Hasła nie są zgodne.")
+            self._show_error("Passwords do not match.")
             return
 
         self._submit_btn.setEnabled(False)
-        self._submit_btn.setText("Odzyskuję…")
+        self._submit_btn.setText("Recovering…")
         from PySide6.QtWidgets import QApplication
         QApplication.processEvents()
 
@@ -178,7 +178,7 @@ class RecoverVaultDialog(QDialog):
         except Exception as exc:
             self._show_error(str(exc) or type(exc).__name__)
             self._submit_btn.setEnabled(True)
-            self._submit_btn.setText("Odzyskaj dostęp")
+            self._submit_btn.setText("Recover Access")
             self._code_field.selectAll()
             self._code_field.setFocus()
             return

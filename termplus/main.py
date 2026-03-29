@@ -126,6 +126,7 @@ def main() -> None:
     connections_page = ConnectionsPage(
         vault.hosts, credential_store, keychain, connection_pool,
         known_hosts=known_hosts_mgr, history_manager=history_mgr,
+        config=app.config,
     )
     window.set_connections_page(connections_page)
 

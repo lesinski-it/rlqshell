@@ -27,7 +27,7 @@ class ChangeMasterPasswordDialog(QDialog):
         super().__init__(parent)
         self._store = credential_store
 
-        self.setWindowTitle(f"{APP_NAME} — Zmień hasło główne")
+        self.setWindowTitle(f"{APP_NAME} — Change Master Password")
         self.setFixedSize(440, 320)
         self.setWindowFlags(
             Qt.WindowType.Dialog
@@ -43,13 +43,13 @@ class ChangeMasterPasswordDialog(QDialog):
         layout.setContentsMargins(32, 28, 32, 24)
         layout.setSpacing(14)
 
-        title = QLabel("Zmień hasło główne")
+        title = QLabel("Change Master Password")
         title.setObjectName("title")
         layout.addWidget(title)
 
         subtitle = QLabel(
-            "Po zmianie zostanie wygenerowany nowy kod odzyskiwania.\n"
-            "Wszystkie dane zostaną ponownie zaszyfrowane."
+            "A new recovery code will be generated after the change.\n"
+            "All data will be re-encrypted."
         )
         subtitle.setObjectName("subtitle")
         subtitle.setWordWrap(True)
@@ -57,19 +57,19 @@ class ChangeMasterPasswordDialog(QDialog):
 
         self._current = QLineEdit()
         self._current.setEchoMode(QLineEdit.EchoMode.Password)
-        self._current.setPlaceholderText("Obecne hasło")
+        self._current.setPlaceholderText("Current password")
         self._current.returnPressed.connect(self._on_submit)
         layout.addWidget(self._current)
 
         self._new_pass = QLineEdit()
         self._new_pass.setEchoMode(QLineEdit.EchoMode.Password)
-        self._new_pass.setPlaceholderText("Nowe hasło (min. 6 znaków)")
+        self._new_pass.setPlaceholderText("New password (min. 6 characters)")
         self._new_pass.returnPressed.connect(self._on_submit)
         layout.addWidget(self._new_pass)
 
         self._confirm = QLineEdit()
         self._confirm.setEchoMode(QLineEdit.EchoMode.Password)
-        self._confirm.setPlaceholderText("Potwierdź nowe hasło")
+        self._confirm.setPlaceholderText("Confirm new password")
         self._confirm.returnPressed.connect(self._on_submit)
         layout.addWidget(self._confirm)
 
@@ -84,12 +84,12 @@ class ChangeMasterPasswordDialog(QDialog):
         btn_row = QHBoxLayout()
         btn_row.addStretch()
 
-        cancel_btn = QPushButton("Anuluj")
+        cancel_btn = QPushButton("Cancel")
         cancel_btn.setObjectName("cancelBtn")
         cancel_btn.clicked.connect(self.reject)
         btn_row.addWidget(cancel_btn)
 
-        self._submit_btn = QPushButton("Zmień hasło")
+        self._submit_btn = QPushButton("Change Password")
         self._submit_btn.setObjectName("submitBtn")
         self._submit_btn.setDefault(True)
         self._submit_btn.clicked.connect(self._on_submit)
@@ -159,17 +159,17 @@ class ChangeMasterPasswordDialog(QDialog):
         confirm = self._confirm.text()
 
         if not current:
-            self._show_error("Podaj obecne hasło.")
+            self._show_error("Enter your current password.")
             return
         if len(new_pass) < 6:
-            self._show_error("Nowe hasło musi mieć co najmniej 6 znaków.")
+            self._show_error("New password must be at least 6 characters.")
             return
         if new_pass != confirm:
-            self._show_error("Nowe hasła nie są zgodne.")
+            self._show_error("New passwords do not match.")
             return
 
         self._submit_btn.setEnabled(False)
-        self._submit_btn.setText("Zmieniam…")
+        self._submit_btn.setText("Changing…")
         from PySide6.QtWidgets import QApplication
         QApplication.processEvents()
 
@@ -178,7 +178,7 @@ class ChangeMasterPasswordDialog(QDialog):
         except Exception as exc:
             self._show_error(str(exc) or type(exc).__name__)
             self._submit_btn.setEnabled(True)
-            self._submit_btn.setText("Zmień hasło")
+            self._submit_btn.setText("Change Password")
             self._current.selectAll()
             self._current.setFocus()
             return

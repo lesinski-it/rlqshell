@@ -137,7 +137,7 @@ class IdentitiesView(QWidget):
         toolbar_layout.addWidget(add_btn)
 
         if credential_store.is_unlocked:
-            change_pwd_btn = QPushButton("Zmień hasło")
+            change_pwd_btn = QPushButton("Change Password")
             change_pwd_btn.setObjectName("changePwdBtn")
             change_pwd_btn.setCursor(Qt.CursorShape.PointingHandCursor)
             change_pwd_btn.clicked.connect(self._on_change_master_password)

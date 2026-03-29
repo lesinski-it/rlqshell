@@ -29,7 +29,7 @@ class MasterPasswordDialog(QDialog):
         self._store = credential_store
         self._is_new = not credential_store.has_master_password
 
-        self.setWindowTitle(f"{APP_NAME} — Hasło główne")
+        self.setWindowTitle(f"{APP_NAME} - Master Password")
         self.setFixedSize(420, 280 if self._is_new else 260)
         self.setWindowFlags(
             Qt.WindowType.Dialog
@@ -47,7 +47,7 @@ class MasterPasswordDialog(QDialog):
 
         # Title
         title = QLabel(
-            "Ustaw hasło główne" if self._is_new else "Odblokuj sejf"
+            "Set Master Password" if self._is_new else "Unlock Vault"
         )
         title.setObjectName("title")
         layout.addWidget(title)
@@ -55,11 +55,11 @@ class MasterPasswordDialog(QDialog):
         # Subtitle
         if self._is_new:
             subtitle = QLabel(
-                "Wybierz hasło główne do ochrony danych sejfu.\n"
-                "Po ustawieniu zostanie wygenerowany jednorazowy kod odzyskiwania."
+                "Choose a master password to protect your vault data.\n"
+                "A one-time recovery code will be generated after setup."
             )
         else:
-            subtitle = QLabel("Podaj hasło główne, aby odblokować sejf.")
+            subtitle = QLabel("Enter your master password to unlock the vault.")
         subtitle.setObjectName("subtitle")
         subtitle.setWordWrap(True)
         layout.addWidget(subtitle)
@@ -67,7 +67,7 @@ class MasterPasswordDialog(QDialog):
         # Password field
         self._password = QLineEdit()
         self._password.setEchoMode(QLineEdit.EchoMode.Password)
-        self._password.setPlaceholderText("Hasło główne")
+        self._password.setPlaceholderText("Master password")
         self._password.returnPressed.connect(self._on_submit)
         layout.addWidget(self._password)
 
@@ -75,7 +75,7 @@ class MasterPasswordDialog(QDialog):
         if self._is_new:
             self._confirm = QLineEdit()
             self._confirm.setEchoMode(QLineEdit.EchoMode.Password)
-            self._confirm.setPlaceholderText("Potwierdź hasło")
+            self._confirm.setPlaceholderText("Confirm password")
             self._confirm.returnPressed.connect(self._on_submit)
             layout.addWidget(self._confirm)
 
@@ -87,7 +87,7 @@ class MasterPasswordDialog(QDialog):
 
         # "Forgot password" link (unlock mode only)
         if not self._is_new:
-            forgot_btn = QPushButton("Zapomniałem/am hasła — użyj kodu odzyskiwania")
+            forgot_btn = QPushButton("Forgot password — use recovery code")
             forgot_btn.setObjectName("forgotBtn")
             forgot_btn.setCursor(Qt.CursorShape.PointingHandCursor)
             forgot_btn.clicked.connect(self._on_forgot_password)
@@ -99,13 +99,13 @@ class MasterPasswordDialog(QDialog):
         btn_row = QHBoxLayout()
         btn_row.addStretch()
 
-        self._skip_btn = QPushButton("Pomiń")
+        self._skip_btn = QPushButton("Skip")
         self._skip_btn.setObjectName("skipBtn")
         self._skip_btn.clicked.connect(self._on_skip)
         btn_row.addWidget(self._skip_btn)
 
         self._submit_btn = QPushButton(
-            "Ustaw hasło" if self._is_new else "Odblokuj"
+            "Set Password" if self._is_new else "Unlock"
         )
         self._submit_btn.setObjectName("submitBtn")
         self._submit_btn.setDefault(True)
@@ -186,16 +186,16 @@ class MasterPasswordDialog(QDialog):
         password = self._password.text().strip()
 
         if not password:
-            self._show_error("Hasło nie może być puste.")
+            self._show_error("Password cannot be empty.")
             return
 
         if self._is_new:
             if len(password) < 6:
-                self._show_error("Hasło musi mieć co najmniej 6 znaków.")
+                self._show_error("Password must be at least 6 characters.")
                 return
             confirm = self._confirm.text().strip()
             if password != confirm:
-                self._show_error("Hasła nie są zgodne.")
+                self._show_error("Passwords do not match.")
                 return
 
             recovery_code = self._store.set_master_password(password)
@@ -209,7 +209,7 @@ class MasterPasswordDialog(QDialog):
             if self._store.unlock(password):
                 self.accept()
             else:
-                self._show_error("Błędne hasło. Spróbuj ponownie.")
+                self._show_error("Incorrect password. Please try again.")
                 self._password.selectAll()
                 self._password.setFocus()
 
@@ -217,11 +217,11 @@ class MasterPasswordDialog(QDialog):
         if not self._store.has_recovery:
             QMessageBox.information(
                 self,
-                "Odzyskiwanie niedostępne",
-                "Ten sejf nie ma zapisanego kodu odzyskiwania.\n\n"
-                "Kod odzyskiwania jest generowany przy ustawieniu lub zmianie\n"
-                "hasła w nowszej wersji aplikacji. Nie możesz odzyskać dostępu\n"
-                "bez znajomości hasła głównego.",
+                "Recovery Unavailable",
+                "This vault has no saved recovery code.\n\n"
+                "A recovery code is generated when setting or changing the\n"
+                "password in a newer version of the application. You cannot\n"
+                "recover access without knowing the master password.",
             )
             return
 
@@ -237,10 +237,10 @@ class MasterPasswordDialog(QDialog):
         else:
             reply = QMessageBox.warning(
                 self,
-                "Pomiń odblokowanie",
-                "Bez odblokowania zaszyfrowane dane uwierzytelniające\n"
-                "nie będą dostępne. Połączenia kluczem SSH nadal działają.\n\n"
-                "Kontynuować bez odblokowania?",
+                "Skip Unlock",
+                "Without unlocking, encrypted credentials will not\n"
+                "be available. SSH key connections will still work.\n\n"
+                "Continue without unlocking?",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                 QMessageBox.StandardButton.No,
             )

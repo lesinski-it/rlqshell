@@ -6,7 +6,7 @@ import logging
 
 import pyte
 
-from PySide6.QtCore import QRect, QRectF, Qt, QTimer, Signal, Slot
+from PySide6.QtCore import QEvent, QRect, QRectF, Qt, QTimer, Signal, Slot
 from PySide6.QtGui import (
     QColor,
     QClipboard,
@@ -71,6 +71,7 @@ _KEY_MAP: dict[int, bytes] = {
     Qt.Key.Key_F12: b"\x1b[24~",
     Qt.Key.Key_Backspace: b"\x7f",
     Qt.Key.Key_Tab: b"\t",
+    Qt.Key.Key_Backtab: b"\x1b[Z",
     Qt.Key.Key_Return: b"\r",
     Qt.Key.Key_Enter: b"\r",
     Qt.Key.Key_Escape: b"\x1b",
@@ -308,6 +309,15 @@ class TerminalWidget(QWidget):
             painter.end()
 
     # --- Keyboard ---
+
+    def event(self, event: QEvent) -> bool:
+        """Intercept Tab/Backtab before Qt uses them for focus navigation."""
+        if event.type() == QEvent.Type.KeyPress:
+            key = event.key()
+            if key in (Qt.Key.Key_Tab, Qt.Key.Key_Backtab):
+                self.keyPressEvent(event)
+                return True
+        return super().event(event)
 
     def keyPressEvent(self, event: QKeyEvent) -> None:
         modifiers = event.modifiers()

@@ -103,6 +103,10 @@ class SSHConnection(AbstractConnection):
         return self._connected
 
     @property
+    def hostname(self) -> str:
+        return self._hostname
+
+    @property
     def transport(self) -> paramiko.Transport | None:
         """Expose transport for SFTP reuse."""
         return self._transport

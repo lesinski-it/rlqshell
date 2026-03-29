@@ -26,7 +26,7 @@ class RecoveryCodeDialog(QDialog):
         super().__init__(parent)
         self._code = recovery_code
 
-        self.setWindowTitle(f"{APP_NAME} — Kod odzyskiwania")
+        self.setWindowTitle(f"{APP_NAME} — Recovery Code")
         self.setFixedSize(460, 340)
         self.setWindowFlags(
             Qt.WindowType.Dialog
@@ -42,13 +42,13 @@ class RecoveryCodeDialog(QDialog):
         layout.setContentsMargins(32, 28, 32, 24)
         layout.setSpacing(16)
 
-        title = QLabel("Zapisz kod odzyskiwania")
+        title = QLabel("Save Your Recovery Code")
         title.setObjectName("title")
         layout.addWidget(title)
 
         subtitle = QLabel(
-            "Ten kod zostanie pokazany tylko raz. Bez niego nie odzyskasz\n"
-            "dostępu do danych sejfu po utracie hasła głównego."
+            "This code will only be shown once. Without it, you will not\n"
+            "be able to recover vault data if you lose your master password."
         )
         subtitle.setObjectName("subtitle")
         subtitle.setWordWrap(True)
@@ -64,7 +64,7 @@ class RecoveryCodeDialog(QDialog):
         layout.addWidget(code_label)
 
         # Copy button
-        copy_btn = QPushButton("Kopiuj do schowka")
+        copy_btn = QPushButton("Copy to clipboard")
         copy_btn.setObjectName("copyBtn")
         copy_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         copy_btn.clicked.connect(self._on_copy)
@@ -73,7 +73,7 @@ class RecoveryCodeDialog(QDialog):
         layout.addSpacing(4)
 
         # Confirmation checkbox
-        self._checkbox = QCheckBox("Zapisałem/am kod w bezpiecznym miejscu")
+        self._checkbox = QCheckBox("I have saved the code in a safe place")
         self._checkbox.setObjectName("confirmCheck")
         self._checkbox.toggled.connect(self._on_checkbox_toggled)
         layout.addWidget(self._checkbox)

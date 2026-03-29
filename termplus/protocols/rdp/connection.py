@@ -16,6 +16,53 @@ logger = logging.getLogger(__name__)
 # Target frame interval (~30 FPS cap)
 _MIN_FRAME_INTERVAL = 1.0 / 30
 
+# ---------------------------------------------------------------------------
+# User-friendly error mapping
+# ---------------------------------------------------------------------------
+
+_ERROR_MAP: list[tuple[str, str]] = [
+    # Authentication / credentials
+    ("logon failure", "Login failed — invalid username or password."),
+    ("login failed", "Login failed — invalid username or password."),
+    ("authentication", "Authentication failed — check your credentials."),
+    ("access denied", "Access denied — insufficient permissions for RDP connection."),
+    ("account locked", "Account has been locked — contact your administrator."),
+    ("account disabled", "Account is disabled."),
+    ("password expired", "Password expired — change it on the target server."),
+    ("credssp", "CredSSP error — the server requires Network Level Authentication (NLA)."),
+    ("ntlm", "NTLM authentication error — check username, password, and domain."),
+    # Network
+    ("winerror 1225", "Connection refused — the remote computer rejected the connection (port closed or RDP service disabled)."),
+    ("winerror 10060", "Connection timed out — host unreachable or port blocked."),
+    ("winerror 10061", "Connection refused — RDP service is not listening on this port."),
+    ("winerror 10065", "No route to host — check the address and network configuration."),
+    ("refused", "Connection refused — the remote computer rejected the network connection."),
+    ("timed out", "Connection timed out — host unreachable or port blocked."),
+    ("timeout", "Connection timed out — host unreachable or port blocked."),
+    ("connection refused", "Connection refused — RDP service is not listening on this port."),
+    ("connection reset", "Connection was reset by the server."),
+    ("no route to host", "No route to host — check the address and network configuration."),
+    ("network unreachable", "Network unreachable — check your network connection."),
+    ("name or service not known", "Could not resolve hostname — check the address."),
+    ("getaddrinfo failed", "Could not resolve hostname — check the address."),
+    # TLS / SSL
+    ("ssl", "TLS/SSL connection error — server certificate problem."),
+    ("certificate", "Server certificate error — untrusted connection."),
+    # Protocol
+    ("negotiation", "RDP protocol negotiation error with the server."),
+    ("disconnect", "Server closed the connection."),
+]
+
+
+def _friendly_error(exc: Exception) -> str:
+    """Translate a raw exception into a user-readable message."""
+    raw = str(exc).lower()
+    for pattern, message in _ERROR_MAP:
+        if pattern in raw:
+            return message
+    # Fallback — return the original message
+    return str(exc)
+
 
 class RDPConnection(AbstractConnection):
     """RDP connection using aardwolf (pure Python, no external tools)."""
@@ -55,13 +102,21 @@ class RDPConnection(AbstractConnection):
 
     async def connect(self) -> None:
         try:
+            self._validate_credentials()
             await self._do_connect()
             self._connected = True
             self.connected.emit()
         except Exception as exc:
             logger.exception("RDP connection failed: %s", exc)
-            self.error.emit(str(exc))
+            self.error.emit(_friendly_error(exc))
             raise
+
+    def _validate_credentials(self) -> None:
+        """Raise early if credentials are clearly missing."""
+        if not self._username:
+            raise ConnectionError("Username is missing — provide RDP login credentials.")
+        if not self._password:
+            raise ConnectionError("Password is missing — provide RDP login password.")
 
     async def _do_connect(self) -> None:
         """Establish RDP connection using aardwolf."""
@@ -167,7 +222,7 @@ class RDPConnection(AbstractConnection):
         except Exception as exc:
             if not self._stop_event.is_set():
                 logger.error("RDP read loop error: %s", exc)
-                self.error.emit(str(exc))
+                self.error.emit(_friendly_error(exc))
         finally:
             self._connected = False
             self.disconnected.emit()

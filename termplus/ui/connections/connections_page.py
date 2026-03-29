@@ -10,6 +10,7 @@ import uuid
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import QStackedWidget, QVBoxLayout, QWidget
 
+from termplus.app.config import ConfigManager
 from termplus.app.constants import Colors
 from termplus.core.connection_pool import ConnectionPool
 from termplus.core.credential_store import CredentialStore
@@ -20,11 +21,13 @@ from termplus.core.known_hosts import HostKeyStatus, KnownHostsManager
 from termplus.core.models.host import Host
 from termplus.protocols.base import AbstractConnection
 from termplus.protocols.ssh.connection import HostKeyVerifyCallback, SSHConnection
+from termplus.protocols.ssh.monitor import ServerMonitor
 from termplus.protocols.rdp.connection import RDPConnection
 from termplus.protocols.rdp.widget import RDPWidget
 from termplus.protocols.vnc.connection import VNCConnection
 from termplus.protocols.vnc.widget import VNCWidget
 from termplus.ui.connections.detached_window import DetachedTabWindow
+from termplus.ui.connections.session_status_bar import SessionStatusBar
 from termplus.ui.connections.tab_bar import ConnectionTabBar
 from termplus.ui.connections.terminal_widget import TerminalWidget
 from termplus.ui.dialogs.host_key_dialog import HostKeyDialog
@@ -48,6 +51,7 @@ class ConnectionsPage(QWidget):
         connection_pool: ConnectionPool,
         known_hosts: KnownHostsManager | None = None,
         history_manager: HistoryManager | None = None,
+        config: ConfigManager | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -57,6 +61,7 @@ class ConnectionsPage(QWidget):
         self._pool = connection_pool
         self._known_hosts = known_hosts
         self._history = history_manager
+        self._config = config
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -80,6 +85,15 @@ class ConnectionsPage(QWidget):
             icon_text="~>_",
         )
         self._terminal_stack.addWidget(self._empty_state)
+
+        # Server monitoring
+        self._monitors: dict[str, ServerMonitor] = {}
+        self._active_monitor_id: str | None = None  # tab_id of monitor wired to status bar
+        monitoring_enabled = config.get("monitoring.enabled", True) if config else True
+        self._status_bar = SessionStatusBar()
+        self._status_bar.set_monitoring_enabled(monitoring_enabled)
+        self._status_bar.monitoring_toggled.connect(self._on_monitoring_toggled)
+        layout.addWidget(self._status_bar)
 
         # Track tab_id → (widget, connection)
         self._sessions: dict[str, tuple[QWidget, AbstractConnection | None]] = {}
@@ -148,6 +162,9 @@ class ConnectionsPage(QWidget):
 
         conn.data_received.connect(terminal.feed)
         conn.connected.connect(terminal.clear_overlay)
+        conn.connected.connect(
+            lambda tid=tab_id, c=conn, h=host.address: self._start_monitor(tid, c, h)
+        )
         conn.disconnected.connect(lambda tid=tab_id: self._on_disconnected(tid))
         conn.error.connect(lambda msg, tid=tab_id: self._on_error(tid, msg))
         terminal.input_ready.connect(conn.send)
@@ -219,6 +236,7 @@ class ConnectionsPage(QWidget):
                 hostname=host.address,
                 username=username or "",
                 domain=host.rdp_domain or "",
+                credential_store=self._credential_store,
                 parent=self.window(),
             )
             if dlg.exec() != dlg.DialogCode.Accepted:
@@ -350,8 +368,12 @@ class ConnectionsPage(QWidget):
             widget, _ = session
             self._terminal_stack.setCurrentWidget(widget)
             widget.setFocus()
+        self._update_status_bar(tab_id)
 
     def _on_tab_close(self, tab_id: str) -> None:
+        monitor = self._monitors.pop(tab_id, None)
+        if monitor:
+            monitor.stop()
         session = self._sessions.pop(tab_id, None)
         if session:
             widget, conn = session
@@ -368,9 +390,18 @@ class ConnectionsPage(QWidget):
 
         if not self._sessions:
             self._terminal_stack.setCurrentWidget(self._empty_state)
+            self._status_bar.clear()
+            self._status_bar.setVisible(False)
+        else:
+            active = self._tab_bar.active_tab
+            if active:
+                self._update_status_bar(active)
 
     def _on_disconnected(self, tab_id: str) -> None:
         logger.info("Connection %s disconnected", tab_id)
+        monitor = self._monitors.pop(tab_id, None)
+        if monitor:
+            monitor.stop()
         session = self._sessions.get(tab_id)
         if session:
             widget, _ = session
@@ -378,6 +409,10 @@ class ConnectionsPage(QWidget):
         rec_id = self._history_records.pop(tab_id, None)
         if rec_id and self._history:
             self._history.record_disconnect(rec_id)
+        # Refresh status bar — monitor stopped, but SSH tab may still be active
+        active = self._tab_bar.active_tab
+        if active:
+            self._update_status_bar(active)
 
     def _on_error(self, tab_id: str, message: str) -> None:
         logger.error("Connection %s error: %s", tab_id, message)
@@ -385,6 +420,74 @@ class ConnectionsPage(QWidget):
         if session:
             widget, _ = session
             widget.show_overlay(f"Error: {message}", color=Colors.DANGER)  # type: ignore[union-attr]
+
+    # ------------------------------------------------------------------
+    # Server monitoring
+    # ------------------------------------------------------------------
+
+    def _start_monitor(self, tab_id: str, conn: SSHConnection, hostname: str) -> None:
+        """Start a server monitor for an SSH session after it connects."""
+        enabled = self._config.get("monitoring.enabled", True) if self._config else True
+        if not enabled or conn.transport is None:
+            return
+        monitor = ServerMonitor(conn.transport, hostname)
+        self._monitors[tab_id] = monitor
+        monitor.start()
+        # Refresh status bar if this tab is currently active
+        session = self._sessions.get(tab_id)
+        if session and self._terminal_stack.currentWidget() is session[0]:
+            self._update_status_bar(tab_id)
+
+    def _update_status_bar(self, tab_id: str) -> None:
+        """Reconnect the status bar to the monitor for the newly active tab."""
+        # Disconnect the previously wired monitor (if any)
+        if self._active_monitor_id is not None:
+            prev = self._monitors.get(self._active_monitor_id)
+            if prev is not None:
+                prev.stats_updated.disconnect(self._status_bar.update_stats)
+            self._active_monitor_id = None
+
+        monitor = self._monitors.get(tab_id)
+        if monitor:
+            monitor.stats_updated.connect(self._status_bar.update_stats)
+            self._active_monitor_id = tab_id
+
+        # Show bar for any active SSH session so the toggle remains accessible.
+        session = self._sessions.get(tab_id)
+        is_ssh = session is not None and isinstance(session[1], SSHConnection)
+        self._status_bar.clear()
+        self._status_bar.setVisible(is_ssh)
+
+    def _on_monitoring_toggled(self, enabled: bool) -> None:
+        """Persist the monitoring toggle state and stop/restart monitors."""
+        if self._config:
+            self._config.set("monitoring.enabled", enabled)
+            self._config.save()
+        if not enabled:
+            # Disconnect active monitor first
+            if self._active_monitor_id is not None:
+                prev = self._monitors.get(self._active_monitor_id)
+                if prev is not None:
+                    prev.stats_updated.disconnect(self._status_bar.update_stats)
+                self._active_monitor_id = None
+            for monitor in list(self._monitors.values()):
+                monitor.stop()
+            self._monitors.clear()
+        else:
+            # Restart monitors for all currently connected SSH sessions
+            for tab_id, (_widget, conn) in self._sessions.items():
+                if (
+                    isinstance(conn, SSHConnection)
+                    and conn.is_connected
+                    and conn.transport is not None
+                    and tab_id not in self._monitors
+                ):
+                    monitor = ServerMonitor(conn.transport, conn.hostname)
+                    self._monitors[tab_id] = monitor
+                    monitor.start()
+            active = self._tab_bar.active_tab
+            if active:
+                self._update_status_bar(active)
 
     # ------------------------------------------------------------------
     # Detach / Dock
@@ -533,8 +636,15 @@ class ConnectionsPage(QWidget):
         return True
 
     def set_tab_bar_visible(self, visible: bool) -> None:
-        """Show or hide the connection tab bar (for fullscreen mode)."""
+        """Show or hide the connection tab bar and status bar (for fullscreen mode)."""
         self._tab_bar.setVisible(visible)
+        if not visible:
+            self._status_bar.setVisible(False)
+        else:
+            # Restore status bar visibility based on current active tab
+            active = self._tab_bar.active_tab
+            if active:
+                self._update_status_bar(active)
 
     def close_all(self) -> None:
         """Close all connections (docked and detached)."""
