@@ -454,7 +454,7 @@ class ConnectionsPage(QWidget):
 
         # Show bar for any active SSH session so the toggle remains accessible.
         session = self._sessions.get(tab_id)
-        is_ssh = session is not None and isinstance(session[1], SSHConnection)
+        is_ssh = session is not None and session[1] is not None and session[1].protocol == "ssh"
         self._status_bar.clear()
         self._status_bar.setVisible(is_ssh)
 
@@ -477,7 +477,7 @@ class ConnectionsPage(QWidget):
             # Restart monitors for all currently connected SSH sessions
             for tab_id, (_widget, conn) in self._sessions.items():
                 if (
-                    isinstance(conn, SSHConnection)
+                    conn.protocol == "ssh"
                     and conn.is_connected
                     and conn.transport is not None
                     and tab_id not in self._monitors

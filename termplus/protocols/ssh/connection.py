@@ -111,6 +111,10 @@ class SSHConnection(AbstractConnection):
         """Expose transport for SFTP reuse."""
         return self._transport
 
+    @property
+    def protocol(self) -> str:
+        return "ssh"
+
     async def connect(self) -> None:
         """Establish SSH connection in a thread."""
         loop = asyncio.get_running_loop()

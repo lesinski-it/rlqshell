@@ -49,6 +49,10 @@ class VNCConnection(AbstractConnection):
         return self._connected
 
     @property
+    def protocol(self) -> str:
+        return "vnc"
+
+    @property
     def fb_width(self) -> int:
         return self._width
 

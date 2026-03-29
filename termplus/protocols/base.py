@@ -47,3 +47,8 @@ class AbstractConnection(QObject, metaclass=_QABCMeta):
     @abstractmethod
     def is_connected(self) -> bool:
         """Whether the connection is currently active."""
+
+    @property
+    @abstractmethod
+    def protocol(self) -> str:
+        """Return the protocol name (e.g., 'ssh', 'rdp')."""

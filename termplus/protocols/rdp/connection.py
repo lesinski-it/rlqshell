@@ -100,6 +100,10 @@ class RDPConnection(AbstractConnection):
     def is_connected(self) -> bool:
         return self._connected
 
+    @property
+    def protocol(self) -> str:
+        return "rdp"
+
     async def connect(self) -> None:
         try:
             self._validate_credentials()
