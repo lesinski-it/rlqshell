@@ -45,7 +45,10 @@ _ANSI_COLORS: dict[str, str] = {
     "brown": "#fab387",
 }
 
-# Qt key → terminal escape sequence mapping
+# DECCKM (Application Cursor Keys) — pyte stores private mode 1 as 1 << 5 = 32
+_DECCKM = 32
+
+# Qt key → terminal escape sequence mapping (normal cursor mode)
 _KEY_MAP: dict[int, bytes] = {
     Qt.Key.Key_Up: b"\x1b[A",
     Qt.Key.Key_Down: b"\x1b[B",
@@ -75,6 +78,16 @@ _KEY_MAP: dict[int, bytes] = {
     Qt.Key.Key_Return: b"\r",
     Qt.Key.Key_Enter: b"\r",
     Qt.Key.Key_Escape: b"\x1b",
+}
+
+# Overrides when DECCKM (application cursor mode) is active — used by mc, vim, etc.
+_APP_CURSOR_MAP: dict[int, bytes] = {
+    Qt.Key.Key_Up: b"\x1bOA",
+    Qt.Key.Key_Down: b"\x1bOB",
+    Qt.Key.Key_Right: b"\x1bOC",
+    Qt.Key.Key_Left: b"\x1bOD",
+    Qt.Key.Key_Home: b"\x1bOH",
+    Qt.Key.Key_End: b"\x1bOF",
 }
 
 
@@ -339,8 +352,11 @@ class TerminalWidget(QWidget):
             self._paste()
             return
 
-        # Mapped keys
-        seq = _KEY_MAP.get(key)
+        # Mapped keys (application cursor mode overrides when DECCKM is active)
+        if _DECCKM in self._screen.mode:
+            seq = _APP_CURSOR_MAP.get(key) or _KEY_MAP.get(key)
+        else:
+            seq = _KEY_MAP.get(key)
         if seq:
             self.input_ready.emit(seq)
             return
