@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 from PySide6.QtCore import QEvent, QMimeData, QPoint, Qt, Signal
-from PySide6.QtGui import QCursor, QDrag
+from PySide6.QtGui import QCursor, QDrag, QPainter
 from PySide6.QtWidgets import (
     QApplication,
     QHBoxLayout,
     QLabel,
     QPushButton,
     QScrollArea,
+    QStyleOption,
     QWidget,
 )
 
@@ -60,6 +61,15 @@ class _TabButton(QWidget):
         layout.setContentsMargins(12, 0, 4, 0)
         layout.setSpacing(6)
 
+        # Color bar on the left edge
+        if color:
+            bar = QLabel()
+            bar.setFixedSize(3, 28)
+            bar.setStyleSheet(
+                f"background-color: {color}; border-radius: 1px; border: none;"
+            )
+            layout.addWidget(bar)
+
         # Protocol badge
         proto = QLabel(protocol.upper())
         proto.setFixedSize(36, 18)
@@ -70,15 +80,6 @@ class _TabButton(QWidget):
             f"padding: 1px 4px; border: none;"
         )
         layout.addWidget(proto)
-
-        # Color dot
-        if color:
-            dot = QLabel()
-            dot.setFixedSize(8, 8)
-            dot.setStyleSheet(
-                f"background-color: {color}; border-radius: 4px; border: none;"
-            )
-            layout.addWidget(dot)
 
         # Label
         self._label = QLabel(label)
@@ -163,17 +164,19 @@ class _TabButton(QWidget):
     def _apply_style(self) -> None:
         if self._active:
             self.setStyleSheet(
-                f"background-color: {Colors.BG_SURFACE}; "
-                f"border-bottom: 2px solid {Colors.ACCENT};"
+                f"background-color: #2d2351; "
+                f"border-bottom: 3px solid {Colors.ACCENT}; "
+                f"border-radius: 6px 6px 0 0;"
             )
             self._label.setStyleSheet(
-                f"font-size: 12px; color: {Colors.TEXT_PRIMARY}; font-weight: 600; "
+                f"font-size: 12px; color: #ffffff; font-weight: 700; "
                 f"background: transparent; border: none;"
             )
         elif self._hovered:
             self.setStyleSheet(
                 f"background-color: {Colors.BG_HOVER}; "
-                f"border-bottom: 2px solid transparent;"
+                f"border-bottom: 2px solid transparent; "
+                f"border-radius: 6px 6px 0 0;"
             )
             self._label.setStyleSheet(
                 f"font-size: 12px; color: {Colors.TEXT_PRIMARY}; "
@@ -185,9 +188,17 @@ class _TabButton(QWidget):
                 f"border-bottom: 2px solid transparent;"
             )
             self._label.setStyleSheet(
-                f"font-size: 12px; color: {Colors.TEXT_SECONDARY}; "
+                f"font-size: 12px; color: {Colors.TEXT_MUTED}; "
                 f"background: transparent; border: none;"
             )
+
+    def paintEvent(self, event) -> None:
+        """Required for QWidget subclass to respect stylesheet background."""
+        opt = QStyleOption()
+        opt.initFrom(self)
+        p = QPainter(self)
+        self.style().drawPrimitive(self.style().PrimitiveElement.PE_Widget, opt, p, self)
+        p.end()
 
     # -- Mouse / Drag --
 

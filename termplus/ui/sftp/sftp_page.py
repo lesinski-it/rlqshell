@@ -8,8 +8,9 @@ import logging
 import uuid
 
 from PySide6.QtCore import Signal
-from PySide6.QtWidgets import QStackedWidget, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QMessageBox, QStackedWidget, QVBoxLayout, QWidget
 
+from termplus.app.config import ConfigManager
 from termplus.core.connection_pool import ConnectionPool
 from termplus.core.credential_store import CredentialStore
 from termplus.core.host_manager import HostManager
@@ -30,6 +31,7 @@ class SFTPPage(QWidget):
     """Page managing tabbed SFTP sessions."""
 
     new_session_requested = Signal()
+    session_count_changed = Signal(int)
 
     def __init__(
         self,
@@ -37,6 +39,7 @@ class SFTPPage(QWidget):
         credential_store: CredentialStore,
         keychain: Keychain,
         connection_pool: ConnectionPool,
+        config: ConfigManager | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -44,6 +47,7 @@ class SFTPPage(QWidget):
         self._credential_store = credential_store
         self._keychain = keychain
         self._pool = connection_pool
+        self._config = config
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -128,8 +132,9 @@ class SFTPPage(QWidget):
 
             self._sessions[tab_id] = (browser, sftp, conn, owns_conn)
 
-            self._tab_bar.add_tab(tab_id, label, protocol="SFTP", show_fullscreen=False)
+            self._tab_bar.add_tab(tab_id, label, protocol="SFTP", color=host.color_label, show_fullscreen=False)
             self._browser_stack.setCurrentWidget(browser)
+            self.session_count_changed.emit(len(self._sessions))
 
             await browser.navigate()
             logger.info("SFTP session opened: %s", label)
@@ -202,6 +207,28 @@ class SFTPPage(QWidget):
             self._browser_stack.setCurrentWidget(browser)
 
     def _on_tab_close(self, tab_id: str) -> None:
+        # Confirm before closing
+        confirm = self._config.get("general.confirm_close_tab", True) if self._config else True
+        if confirm and tab_id in self._sessions:
+            info = self._tab_bar.tab_info(tab_id)
+            label = info[0] if info else "this session"
+            msg = QMessageBox(self)
+            msg.setWindowTitle("Close SFTP Session")
+            msg.setText(f"Close SFTP session to {label}?")
+            msg.setStandardButtons(
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+            )
+            msg.setDefaultButton(QMessageBox.StandardButton.No)
+            from PySide6.QtWidgets import QCheckBox
+            dont_ask = QCheckBox("Don't ask again")
+            msg.setCheckBox(dont_ask)
+            result = msg.exec()
+            if dont_ask.isChecked() and self._config:
+                self._config.set("general.confirm_close_tab", False)
+                self._config.save()
+            if result != QMessageBox.StandardButton.Yes:
+                return
+
         session = self._sessions.pop(tab_id, None)
         if session:
             browser, sftp, conn, owns_conn = session
@@ -214,6 +241,7 @@ class SFTPPage(QWidget):
                 if not still_used:
                     conn.close()
         self._tab_bar.remove_tab(tab_id)
+        self.session_count_changed.emit(len(self._sessions))
 
         if not self._sessions:
             self._browser_stack.setCurrentWidget(self._empty_state)

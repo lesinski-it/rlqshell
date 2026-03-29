@@ -97,11 +97,11 @@ class TagSelector(QWidget):
         self._rebuild()
 
     def _rebuild(self) -> None:
-        # Clear layout except add button
+        # Remove all widgets from layout but keep _add_btn alive
         while self._layout.count() > 0:
             item = self._layout.takeAt(0)
             w = item.widget()
-            if w:
+            if w and w is not self._add_btn:
                 w.deleteLater()
 
         for tag in self._tags:

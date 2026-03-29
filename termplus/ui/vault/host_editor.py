@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QMenu,
     QPushButton,
     QScrollArea,
     QSpinBox,
@@ -23,7 +24,8 @@ from termplus.app.constants import Colors
 from termplus.core.credential_store import CredentialStore
 from termplus.core.host_manager import HostManager
 from termplus.core.keychain import Keychain
-from termplus.core.models.host import Host
+from termplus.core.models.host import Host, Tag
+from termplus.ui.widgets.tag_widget import TagSelector
 
 logger = logging.getLogger(__name__)
 
@@ -114,6 +116,19 @@ class HostEditorContent(QWidget):
         self._group_combo = QComboBox()
         self._group_combo.addItem("No group", None)
         self._add_field("Group", self._group_combo)
+
+        # Tags
+        tags_label = QLabel("Tags")
+        tags_label.setStyleSheet(
+            f"font-size: 12px; font-weight: 600; color: {Colors.TEXT_SECONDARY}; "
+            f"background: transparent; margin-bottom: 2px;"
+        )
+        self._form_layout.addWidget(tags_label)
+
+        self._tag_selector = TagSelector()
+        self._tag_selector.tags_changed.connect(self._on_tags_changed)
+        self._tag_selector._add_btn.clicked.connect(self._on_add_tag)
+        self._form_layout.addWidget(self._tag_selector)
 
         # SSH options section
         self._ssh_header = QLabel("SSH Options")
@@ -339,6 +354,12 @@ class HostEditorContent(QWidget):
         self._rdp_audio_check.blockSignals(False)
         self._rdp_clipboard_check.blockSignals(False)
 
+        # Load tags
+        self._tag_selector.set_tags([
+            {"id": t.id, "name": t.name, "color": t.color}
+            for t in host.tags
+        ])
+
         self._update_protocol_sections(host.protocol)
         self._update_color_buttons(host.color_label)
         self._save_indicator.setText("")
@@ -484,6 +505,145 @@ class HostEditorContent(QWidget):
             host.telnet_port = port
         else:
             host.ssh_port = port
+
+    def _on_tags_changed(self, tag_ids: list[int]) -> None:
+        """Sync tag assignments when pills are removed."""
+        if self._host is None or self._host.id is None:
+            return
+        # Get current tag ids from DB
+        current = {t.id for t in self._host_manager.get_host_tags(self._host.id)}
+        desired = set(tag_ids)
+        for tid in current - desired:
+            self._host_manager.remove_tag_from_host(self._host.id, tid)
+        for tid in desired - current:
+            self._host_manager.add_tag_to_host(self._host.id, tid)
+        # Refresh host tags
+        self._host.tags = self._host_manager.get_host_tags(self._host.id)
+        self.host_saved.emit()
+
+    def _on_add_tag(self) -> None:
+        """Show a popup menu to pick an existing tag or create a new one."""
+        if self._host is None or self._host.id is None:
+            return
+        all_tags = self._host_manager.list_tags()
+        current_ids = {t.id for t in self._host.tags}
+
+        menu = QMenu(self)
+
+        # Existing tags not yet assigned
+        available = [t for t in all_tags if t.id not in current_ids]
+        for tag in available:
+            action = menu.addAction(f"● {tag.name}")
+            action.setData(("assign", tag))
+
+        if available:
+            menu.addSeparator()
+
+        create_action = menu.addAction("+ Create new tag…")
+        create_action.setData(("create", None))
+
+        action = menu.exec(self._tag_selector._add_btn.mapToGlobal(
+            self._tag_selector._add_btn.rect().bottomLeft()
+        ))
+
+        if action is None:
+            return
+
+        kind, data = action.data()
+        if kind == "assign" and data:
+            tag: Tag = data
+            self._host_manager.add_tag_to_host(self._host.id, tag.id)
+            self._host.tags = self._host_manager.get_host_tags(self._host.id)
+            self._tag_selector.set_tags([
+                {"id": t.id, "name": t.name, "color": t.color}
+                for t in self._host.tags
+            ])
+            self.host_saved.emit()
+        elif kind == "create":
+            self._create_new_tag()
+
+    def _create_new_tag(self) -> None:
+        """Open a simple dialog to create a new tag and assign it."""
+        if self._host is None or self._host.id is None:
+            return
+        from PySide6.QtWidgets import QDialog, QDialogButtonBox
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("New Tag")
+        dialog.setFixedSize(320, 200)
+        dlg_layout = QVBoxLayout(dialog)
+        dlg_layout.setContentsMargins(20, 20, 20, 20)
+        dlg_layout.setSpacing(12)
+
+        name_label = QLabel("Name")
+        name_label.setStyleSheet(
+            f"font-size: 12px; font-weight: 600; color: {Colors.TEXT_SECONDARY}; "
+            f"background: transparent;"
+        )
+        dlg_layout.addWidget(name_label)
+        name_edit = QLineEdit()
+        name_edit.setPlaceholderText("e.g. production")
+        dlg_layout.addWidget(name_edit)
+
+        color_label = QLabel("Color")
+        color_label.setStyleSheet(
+            f"font-size: 12px; font-weight: 600; color: {Colors.TEXT_SECONDARY}; "
+            f"background: transparent;"
+        )
+        dlg_layout.addWidget(color_label)
+
+        color_row = QHBoxLayout()
+        tag_colors = ["#e94560", "#22c55e", "#3b82f6", "#f59e0b", "#7c3aed", "#ec4899", "#14b8a6", "#6c757d"]
+        selected_color = {"value": tag_colors[0]}
+        color_btns: list[QPushButton] = []
+
+        def _select_color(c: str) -> None:
+            selected_color["value"] = c
+            for b in color_btns:
+                bc = b.property("color_value")
+                if bc == c:
+                    b.setStyleSheet(
+                        f"QPushButton {{ background-color: {bc}; "
+                        f"border: 3px solid {Colors.TEXT_PRIMARY}; border-radius: 12px; }}"
+                    )
+                else:
+                    b.setStyleSheet(
+                        f"QPushButton {{ background-color: {bc}; "
+                        f"border: 2px solid transparent; border-radius: 12px; }}"
+                    )
+
+        for c in tag_colors:
+            btn = QPushButton()
+            btn.setFixedSize(24, 24)
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.setProperty("color_value", c)
+            btn.clicked.connect(lambda checked=False, color=c: _select_color(color))
+            color_btns.append(btn)
+            color_row.addWidget(btn)
+        color_row.addStretch()
+        _select_color(tag_colors[0])
+        dlg_layout.addLayout(color_row)
+
+        dlg_layout.addStretch()
+
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        dlg_layout.addWidget(buttons)
+
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            name = name_edit.text().strip()
+            if not name:
+                return
+            tag = Tag(name=name, color=selected_color["value"])
+            tag_id = self._host_manager.create_tag(tag)
+            self._host_manager.add_tag_to_host(self._host.id, tag_id)
+            self._host.tags = self._host_manager.get_host_tags(self._host.id)
+            self._tag_selector.set_tags([
+                {"id": t.id, "name": t.name, "color": t.color}
+                for t in self._host.tags
+            ])
+            self.host_saved.emit()
 
     def _on_connect(self) -> None:
         if self._host and self._host.id:

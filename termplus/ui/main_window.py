@@ -10,12 +10,14 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QMainWindow,
+    QMessageBox,
     QPushButton,
     QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
 
+from termplus.app.config import ConfigManager
 from termplus.app.constants import APP_NAME, APP_VERSION, Colors
 from termplus.ui.top_bar import TopBar
 
@@ -177,12 +179,38 @@ class MainWindow(QMainWindow):
     def _on_settings_requested(self) -> None:
         logger.info("Settings requested — dialog coming in Stage 8")
 
+    def set_config(self, config: ConfigManager) -> None:
+        """Set the config manager for persistent settings."""
+        self._config = config
+
     def set_cleanup_callback(self, callback) -> None:
         """Register a callback to run on window close for resource cleanup."""
         self._cleanup_callback = callback
 
     def closeEvent(self, event) -> None:
-        """Handle window close — run cleanup callback if set."""
+        """Handle window close — confirm, then run cleanup callback."""
+        config = getattr(self, "_config", None)
+        confirm = config.get("general.confirm_close_app", True) if config else True
+
+        if confirm:
+            from PySide6.QtWidgets import QCheckBox
+            msg = QMessageBox(self)
+            msg.setWindowTitle("Exit Termplus")
+            msg.setText("Are you sure you want to quit?")
+            msg.setStandardButtons(
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+            )
+            msg.setDefaultButton(QMessageBox.StandardButton.No)
+            dont_ask = QCheckBox("Don't ask again")
+            msg.setCheckBox(dont_ask)
+            result = msg.exec()
+            if dont_ask.isChecked() and config:
+                config.set("general.confirm_close_app", False)
+                config.save()
+            if result != QMessageBox.StandardButton.Yes:
+                event.ignore()
+                return
+
         logger.info("MainWindow closing")
         if hasattr(self, "_cleanup_callback") and self._cleanup_callback:
             try:

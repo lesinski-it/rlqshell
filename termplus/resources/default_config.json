@@ -17,7 +17,8 @@
     },
     "general": {
         "language": "en",
-        "confirm_on_close": true,
+        "confirm_close_app": true,
+        "confirm_close_tab": true,
         "auto_save": true,
         "auto_save_interval": 1000,
         "startup_page": "vault"

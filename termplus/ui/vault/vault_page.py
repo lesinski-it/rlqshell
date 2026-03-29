@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
 )
 
 from termplus.app.constants import Colors
+from termplus.core.connection_pool import ConnectionPool
 from termplus.core.credential_store import CredentialStore
 from termplus.core.host_manager import HostManager
 from termplus.core.keychain import Keychain
@@ -65,6 +66,7 @@ class VaultPage(QWidget):
         snippet_manager: SnippetManager | None = None,
         history_manager: HistoryManager | None = None,
         pf_manager: PortForwardManager | None = None,
+        connection_pool: ConnectionPool | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -90,7 +92,7 @@ class VaultPage(QWidget):
         layout.addWidget(self._content_stack, 1)
 
         # Host list (default section)
-        self._host_list = HostListWidget(host_manager)
+        self._host_list = HostListWidget(host_manager, connection_pool=connection_pool)
         self._host_list.host_selected.connect(self._on_host_selected)
         self._host_list.host_connect_requested.connect(self._on_host_connect)
         self._host_list.sftp_requested.connect(self._on_sftp_requested)

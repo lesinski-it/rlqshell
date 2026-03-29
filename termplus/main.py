@@ -109,6 +109,7 @@ def main() -> None:
 
     from termplus.ui.main_window import MainWindow
     window = MainWindow()
+    window.set_config(app.config)
 
     # Install real Vault page
     vault_page = VaultPage(
@@ -119,6 +120,7 @@ def main() -> None:
         snippet_manager=vault.snippets,
         history_manager=history_mgr,
         pf_manager=pf_mgr,
+        connection_pool=connection_pool,
     )
     window.set_vault_page(vault_page)
 
@@ -162,13 +164,17 @@ def main() -> None:
     # Install SFTP page
     sftp_page = SFTPPage(
         vault.hosts, credential_store, keychain, connection_pool,
+        config=app.config,
     )
     window.set_sftp_page(sftp_page)
     sftp_page.new_session_requested.connect(go_to_vault_hosts)
 
-    # Update connection badge in top bar
+    # Update connection/SFTP counts in top bar
     connections_page.connection_count_changed.connect(
         window.top_bar.set_connection_count
+    )
+    sftp_page.session_count_changed.connect(
+        window.top_bar.set_sftp_count
     )
 
     # Command Palette (Ctrl+K)

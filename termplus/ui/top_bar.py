@@ -58,14 +58,9 @@ class TopBar(QWidget):
 
         layout.addStretch()
 
-        # Connection count badge (for Connections tab)
-        self._connection_badge = QLabel("")
-        self._connection_badge.setStyleSheet(
-            f"background-color: {Colors.ACCENT}; color: white; "
-            f"border-radius: 9px; padding: 2px 7px; font-size: 11px; font-weight: 600;"
-        )
-        self._connection_badge.setVisible(False)
-        layout.addWidget(self._connection_badge)
+        # Track counts for inline display
+        self._connection_count = 0
+        self._sftp_count = 0
 
         layout.addSpacing(12)
 
@@ -106,12 +101,16 @@ class TopBar(QWidget):
             btn.setStyleSheet(self._nav_button_style(i == self._current_index))
 
     def set_connection_count(self, count: int) -> None:
-        """Update the connection badge count."""
-        if count > 0:
-            self._connection_badge.setText(str(count))
-            self._connection_badge.setVisible(True)
-        else:
-            self._connection_badge.setVisible(False)
+        """Update the Connections button label with count."""
+        self._connection_count = count
+        btn = self._nav_buttons[self.PAGE_CONNECTIONS]
+        btn.setText(f"Connections ({count})" if count > 0 else "Connections")
+
+    def set_sftp_count(self, count: int) -> None:
+        """Update the SFTP button label with count."""
+        self._sftp_count = count
+        btn = self._nav_buttons[self.PAGE_SFTP]
+        btn.setText(f"SFTP ({count})" if count > 0 else "SFTP")
 
     @staticmethod
     def _nav_button_style(active: bool) -> str:

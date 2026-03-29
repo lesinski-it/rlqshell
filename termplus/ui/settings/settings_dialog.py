@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
 from termplus.app.config import ConfigManager
 from termplus.app.constants import Colors
 from termplus.ui.settings.appearance_settings import AppearanceSettings
+from termplus.ui.settings.general_settings import GeneralSettings
 from termplus.ui.settings.keybinding_settings import KeybindingSettings
 from termplus.ui.settings.sync_settings import SyncSettings
 from termplus.ui.settings.terminal_settings import TerminalSettings
@@ -68,6 +69,7 @@ class SettingsDialog(QDialog):
         layout.addWidget(self._stack, 1)
 
         # Add settings pages
+        self._add_page("General", GeneralSettings(config))
         self._add_page("Terminal", TerminalSettings(config))
         self._add_page("Appearance", AppearanceSettings(config))
         self._add_page("Key Bindings", KeybindingSettings(config))

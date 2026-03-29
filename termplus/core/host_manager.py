@@ -124,6 +124,8 @@ class HostManager:
         vault_id: int = 1,
         group_id: int | None = None,
         search: str | None = None,
+        protocol: str | None = None,
+        tag_ids: list[int] | None = None,
     ) -> list[Host]:
         """List hosts with optional filtering."""
         sql = "SELECT * FROM hosts WHERE vault_id=?"
@@ -137,6 +139,21 @@ class HostManager:
             sql += " AND (label LIKE ? OR address LIKE ?)"
             like = f"%{search}%"
             params.extend([like, like])
+
+        if protocol:
+            sql += " AND protocol=?"
+            params.append(protocol)
+
+        if tag_ids:
+            placeholders = ",".join("?" for _ in tag_ids)
+            sql += (
+                f" AND id IN ("
+                f"SELECT host_id FROM host_tags WHERE tag_id IN ({placeholders})"
+                f" GROUP BY host_id HAVING COUNT(DISTINCT tag_id) = ?"
+                f")"
+            )
+            params.extend(tag_ids)
+            params.append(len(tag_ids))
 
         sql += " ORDER BY sort_order, label"
         rows = self._db.fetchall(sql, tuple(params))

@@ -8,7 +8,7 @@ import logging
 import uuid
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtWidgets import QStackedWidget, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QMessageBox, QStackedWidget, QVBoxLayout, QWidget
 
 from termplus.app.config import ConfigManager
 from termplus.app.constants import Colors
@@ -171,7 +171,7 @@ class ConnectionsPage(QWidget):
         terminal.size_changed.connect(conn.resize)
 
         self._sessions[tab_id] = (terminal, conn)
-        self._pool.add(tab_id, conn)
+        self._pool.add(tab_id, conn, host_id=host.id)
 
         self._tab_bar.add_tab(
             tab_id, label, protocol="SSH", color=host.color_label,
@@ -206,7 +206,7 @@ class ConnectionsPage(QWidget):
         conn.error.connect(lambda msg, tid=tab_id: self._on_error(tid, msg))
 
         self._sessions[tab_id] = (container, conn)
-        self._pool.add(tab_id, conn)
+        self._pool.add(tab_id, conn, host_id=host.id)
 
         self._tab_bar.add_tab(
             tab_id, label, protocol="VNC", color=host.color_label,
@@ -266,7 +266,7 @@ class ConnectionsPage(QWidget):
         conn.error.connect(lambda msg, tid=tab_id: self._on_error(tid, msg))
 
         self._sessions[tab_id] = (container, conn)
-        self._pool.add(tab_id, conn)
+        self._pool.add(tab_id, conn, host_id=host.id)
 
         self._tab_bar.add_tab(
             tab_id, label, protocol="RDP", color=host.color_label,
@@ -371,6 +371,30 @@ class ConnectionsPage(QWidget):
         self._update_status_bar(tab_id)
 
     def _on_tab_close(self, tab_id: str) -> None:
+        # Confirm before closing an active connection
+        confirm = self._config.get("general.confirm_close_tab", True) if self._config else True
+        session = self._sessions.get(tab_id)
+        if confirm and session and session[1] is not None and session[1].is_connected:
+            info = self._tab_bar.tab_info(tab_id)
+            label = info[0] if info else "this host"
+            msg = QMessageBox(self)
+            msg.setWindowTitle("Close Connection")
+            msg.setText(f"Disconnect from {label}?")
+            msg.setStandardButtons(
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+            )
+            msg.setDefaultButton(QMessageBox.StandardButton.No)
+            cb = msg.checkBox()
+            from PySide6.QtWidgets import QCheckBox
+            dont_ask = QCheckBox("Don't ask again")
+            msg.setCheckBox(dont_ask)
+            result = msg.exec()
+            if dont_ask.isChecked() and self._config:
+                self._config.set("general.confirm_close_tab", False)
+                self._config.save()
+            if result != QMessageBox.StandardButton.Yes:
+                return
+
         monitor = self._monitors.pop(tab_id, None)
         if monitor:
             monitor.stop()
