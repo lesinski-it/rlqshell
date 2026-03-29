@@ -154,14 +154,17 @@ def main() -> None:
 
     vault_page.snippet_run_requested.connect(_on_snippet_run)
 
+    def go_to_vault_hosts() -> None:
+        """Navigate to the Vault and ensure the Hosts section is visible."""
+        window.top_bar.navigate_to(TopBar.PAGE_VAULT)
+        vault_page.go_to_section("hosts")
+
     # Install SFTP page
     sftp_page = SFTPPage(
         vault.hosts, credential_store, keychain, connection_pool,
     )
     window.set_sftp_page(sftp_page)
-    sftp_page.new_session_requested.connect(
-        lambda: window.top_bar.navigate_to(TopBar.PAGE_VAULT)
-    )
+    sftp_page.new_session_requested.connect(go_to_vault_hosts)
 
     # Update connection badge in top bar
     connections_page.connection_count_changed.connect(
@@ -238,9 +241,7 @@ def main() -> None:
     connections_page._tab_bar.fullscreen_requested.connect(_toggle_fullscreen)
 
     # "+" button in tab bar → navigate to Vault to pick a host
-    connections_page._tab_bar.new_tab_requested.connect(
-        lambda: window.top_bar.navigate_to(TopBar.PAGE_VAULT)
-    )
+    connections_page._tab_bar.new_tab_requested.connect(go_to_vault_hosts)
 
     # Wire settings button in top bar
     window.top_bar.settings_requested.disconnect()

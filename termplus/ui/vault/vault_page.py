@@ -185,3 +185,8 @@ class VaultPage(QWidget):
         self._editor_panel.close()
         self._host_list.refresh()
 
+    def go_to_section(self, section: str) -> None:
+        """Programmatically switch to a vault section."""
+        # This will also trigger _on_section_changed via the signal
+        self._sidebar.select_section(section)
+

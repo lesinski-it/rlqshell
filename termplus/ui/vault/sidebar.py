@@ -109,3 +109,8 @@ class Sidebar(QWidget):
         for item in self._items:
             item.set_active(item.section_key == section_key)
         self.section_changed.emit(section_key)
+
+    def select_section(self, section_key: str) -> None:
+        """Programmatically select a section."""
+        if any(item.section_key == section_key for item in self._items):
+            self._on_item_click(section_key)
