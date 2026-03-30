@@ -171,6 +171,9 @@ class VaultPage(QWidget):
         # Close editor if switching sections
         if self._editor_panel.is_open:
             self._editor_panel.close()
+        # Refresh history when switching to that section
+        if section == "history" and isinstance(self._history_section, HistoryView):
+            self._history_section.refresh()
 
     def _on_host_selected(self, host_id: int) -> None:
         self._editor_content.load_host(host_id)

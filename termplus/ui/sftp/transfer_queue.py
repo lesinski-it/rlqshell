@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
+import threading
 import uuid
 
 from PySide6.QtCore import Qt, Signal
@@ -23,6 +25,10 @@ from termplus.protocols.ssh.sftp_session import SFTPSession
 logger = logging.getLogger(__name__)
 
 
+class _TransferCancelled(Exception):
+    """Raised inside paramiko progress callback to abort a transfer."""
+
+
 class _TransferItem(QWidget):
     """Single transfer progress row."""
 
@@ -34,6 +40,7 @@ class _TransferItem(QWidget):
     ) -> None:
         super().__init__(parent)
         self._transfer_id = transfer_id
+        self._cancelled = threading.Event()
         self.setFixedHeight(40)
 
         layout = QHBoxLayout(self)
@@ -98,6 +105,20 @@ class _TransferItem(QWidget):
         self._status.setStyleSheet(
             f"font-size: 11px; color: {Colors.SUCCESS}; background: transparent;"
         )
+
+    def mark_cancelled(self) -> None:
+        self._status.setText("Cancelled")
+        self._status.setStyleSheet(
+            f"font-size: 11px; color: {Colors.WARNING}; background: transparent;"
+        )
+
+    def cancel(self) -> None:
+        """Signal this transfer to abort at the next progress callback."""
+        self._cancelled.set()
+
+    @property
+    def is_cancelled(self) -> bool:
+        return self._cancelled.is_set()
 
     def mark_error(self, msg: str = "Error") -> None:
         self._status.setText(msg)
@@ -191,6 +212,7 @@ class TransferQueue(QWidget):
         self._scroll.setWidget(self._container)
 
         self._transfers: dict[str, _TransferItem] = {}
+        self._tasks: dict[str, asyncio.Task] = {}
         self._scroll.setVisible(False)
         self._active_count = 0      # currently running transfers
         self._total_count = 0       # total in current batch (resets when all done)
@@ -227,9 +249,10 @@ class TransferQueue(QWidget):
         self._update_global_progress()
 
         # Start the transfer task
-        asyncio.ensure_future(
+        task = asyncio.ensure_future(
             self._run_transfer(transfer_id, sftp, direction, local_path, remote_path)
         )
+        self._tasks[transfer_id] = task
 
         return transfer_id
 
@@ -249,57 +272,88 @@ class TransferQueue(QWidget):
         if session_key not in self._session_locks:
             self._session_locks[session_key] = asyncio.Lock()
 
-        async with self._session_locks[session_key]:
-            item.set_status("Transferring")
-            loop = asyncio.get_running_loop()
+        try:
+            async with self._session_locks[session_key]:
+                # Check if cancelled while waiting for the lock
+                if item.is_cancelled:
+                    item.mark_cancelled()
+                    return
 
-            def _progress(transferred: int, total: int) -> None:
-                if total > 0:
-                    pct = int(transferred / total * 100)
-                    def _update(p=pct):
-                        item.set_progress(p)
-                        self._current_file_pct = p
-                        self._update_global_progress()
-                    loop.call_soon_threadsafe(_update)
+                item.set_status("Transferring")
+                loop = asyncio.get_running_loop()
 
-            try:
-                if direction == "download":
-                    await sftp.download(remote_path, local_path, _progress)
-                else:
-                    await sftp.upload(local_path, remote_path, _progress)
-                item.mark_complete()
-                if direction == "upload":
-                    session_key = id(sftp)
-                    self._pending_uploads[session_key] = max(0, self._pending_uploads.get(session_key, 1) - 1)
-                    if self._pending_uploads[session_key] == 0:
-                        self.upload_completed.emit(sftp)
-            except PermissionError:
-                logger.error("Transfer %s failed: permission denied", transfer_id)
-                item.mark_error("Permission denied")
-                self._show_error(f"Permission denied: {local_path.split('/')[-1]}")
-            except Exception as exc:
-                logger.exception("Transfer %s failed", transfer_id)
-                item.mark_error(str(exc)[:30])
-                self._show_error(f"Transfer failed: {exc}")
-            finally:
-                self._active_count = max(0, self._active_count - 1)
-                self._done_count += 1
-                self._current_file_pct = 0
-                self._update_global_progress()
+                def _progress(transferred: int, total: int) -> None:
+                    if item.is_cancelled:
+                        raise _TransferCancelled()
+                    if total > 0:
+                        pct = int(transferred / total * 100)
+                        def _update(p=pct):
+                            if not item.is_cancelled:
+                                item.set_progress(p)
+                                self._current_file_pct = p
+                                self._update_global_progress()
+                        loop.call_soon_threadsafe(_update)
+
+                try:
+                    if direction == "download":
+                        await sftp.download(remote_path, local_path, _progress)
+                    else:
+                        await sftp.upload(local_path, remote_path, _progress)
+                    item.mark_complete()
+                    if direction == "upload":
+                        session_key = id(sftp)
+                        self._pending_uploads[session_key] = max(0, self._pending_uploads.get(session_key, 1) - 1)
+                        if self._pending_uploads[session_key] == 0:
+                            self.upload_completed.emit(sftp)
+                except _TransferCancelled:
+                    logger.info("Transfer %s cancelled by user", transfer_id)
+                    item.mark_cancelled()
+                    if direction == "download":
+                        # Remove incomplete downloaded file
+                        try:
+                            os.remove(local_path)
+                        except OSError:
+                            pass
+                    elif direction == "upload":
+                        self._pending_uploads[session_key] = max(0, self._pending_uploads.get(session_key, 1) - 1)
+                        if self._pending_uploads[session_key] == 0:
+                            self.upload_completed.emit(sftp)
+                except PermissionError:
+                    logger.error("Transfer %s failed: permission denied", transfer_id)
+                    item.mark_error("Permission denied")
+                    self._show_error(f"Permission denied: {local_path.split('/')[-1]}")
+                except Exception as exc:
+                    logger.exception("Transfer %s failed", transfer_id)
+                    item.mark_error(str(exc)[:30])
+                    self._show_error(f"Transfer failed: {exc}")
+        except asyncio.CancelledError:
+            logger.info("Transfer %s task cancelled", transfer_id)
+            item.mark_cancelled()
+        finally:
+            self._active_count = max(0, self._active_count - 1)
+            self._done_count += 1
+            self._current_file_pct = 0
+            self._update_global_progress()
+            self._tasks.pop(transfer_id, None)
 
         self._update_title()
 
     def _cancel_transfer(self, transfer_id: str) -> None:
-        item = self._transfers.pop(transfer_id, None)
-        if item:
-            self._list_layout.removeWidget(item)
-            item.deleteLater()
-            self._update_title()
+        item = self._transfers.get(transfer_id)
+        if not item:
+            return
+        # Signal the progress callback to abort the paramiko transfer
+        item.cancel()
+        # Cancel the asyncio task (handles the case where it's waiting for the lock)
+        task = self._tasks.get(transfer_id)
+        if task and not task.done():
+            task.cancel()
 
     def _clear_completed(self) -> None:
         for tid in list(self._transfers):
             item = self._transfers[tid]
-            if item._progress.value() == 100 or "Error" in (item._status.text() or ""):
+            status = item._status.text() or ""
+            if item._progress.value() == 100 or "Error" in status or status == "Cancelled":
                 self._list_layout.removeWidget(item)
                 item.deleteLater()
                 del self._transfers[tid]

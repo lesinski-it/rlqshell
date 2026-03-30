@@ -164,7 +164,7 @@ def main() -> None:
     # Install SFTP page
     sftp_page = SFTPPage(
         vault.hosts, credential_store, keychain, connection_pool,
-        config=app.config,
+        config=app.config, history_manager=history_mgr,
     )
     window.set_sftp_page(sftp_page)
     sftp_page.new_session_requested.connect(go_to_vault_hosts)

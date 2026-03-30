@@ -13,6 +13,7 @@ from PySide6.QtWidgets import QMessageBox, QStackedWidget, QVBoxLayout, QWidget
 from termplus.app.config import ConfigManager
 from termplus.core.connection_pool import ConnectionPool
 from termplus.core.credential_store import CredentialStore
+from termplus.core.history_manager import HistoryManager
 from termplus.core.host_manager import HostManager
 from termplus.core.keychain import Keychain
 from termplus.core.models.host import Host
@@ -40,6 +41,7 @@ class SFTPPage(QWidget):
         keychain: Keychain,
         connection_pool: ConnectionPool,
         config: ConfigManager | None = None,
+        history_manager: HistoryManager | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -48,6 +50,8 @@ class SFTPPage(QWidget):
         self._keychain = keychain
         self._pool = connection_pool
         self._config = config
+        self._history = history_manager
+        self._history_records: dict[str, int] = {}
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -139,6 +143,12 @@ class SFTPPage(QWidget):
             await browser.navigate()
             logger.info("SFTP session opened: %s", label)
 
+            if self._history:
+                rec_id = self._history.record_connect(
+                    host.id, label, host.address, "sftp",
+                )
+                self._history_records[tab_id] = rec_id
+
         except Exception as exc:
             logger.exception("Failed to open SFTP for %s", label)
             ToastManager.instance().show_toast(
@@ -228,6 +238,10 @@ class SFTPPage(QWidget):
                 self._config.save()
             if result != QMessageBox.StandardButton.Yes:
                 return
+
+        rec_id = self._history_records.pop(tab_id, None)
+        if rec_id and self._history:
+            self._history.record_disconnect(rec_id)
 
         session = self._sessions.pop(tab_id, None)
         if session:
