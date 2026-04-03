@@ -96,6 +96,7 @@ class TerminalWidget(QWidget):
 
     input_ready = Signal(bytes)  # data to send to the connection
     size_changed = Signal(int, int)  # cols, rows
+    focus_gained = Signal()  # emitted when the terminal receives focus
 
     def __init__(
         self,
@@ -320,6 +321,12 @@ class TerminalWidget(QWidget):
                 )
         finally:
             painter.end()
+
+    # --- Focus ---
+
+    def focusInEvent(self, event) -> None:
+        super().focusInEvent(event)
+        self.focus_gained.emit()
 
     # --- Keyboard ---
 

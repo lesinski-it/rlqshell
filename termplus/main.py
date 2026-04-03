@@ -246,6 +246,17 @@ def main() -> None:
     window.fullscreen_toggled.connect(_toggle_fullscreen)
     connections_page._tab_bar.fullscreen_requested.connect(_toggle_fullscreen)
 
+    # Split view shortcuts
+    sc_split_v = QShortcut(QKeySequence("Ctrl+Shift+E"), window)
+    sc_split_v.activated.connect(connections_page.split_vertical)
+
+    sc_split_h = QShortcut(QKeySequence("Ctrl+Shift+O"), window)
+    sc_split_h.activated.connect(connections_page.split_horizontal)
+
+    # Broadcast mode
+    sc_broadcast = QShortcut(QKeySequence("Ctrl+Shift+B"), window)
+    sc_broadcast.activated.connect(connections_page.toggle_broadcast)
+
     # "+" button in tab bar → navigate to Vault to pick a host
     connections_page._tab_bar.new_tab_requested.connect(go_to_vault_hosts)
 

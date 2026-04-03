@@ -7,7 +7,7 @@ import getpass
 import logging
 import uuid
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QTimer, Qt, Signal
 from PySide6.QtWidgets import QMessageBox, QStackedWidget, QVBoxLayout, QWidget
 
 from termplus.app.config import ConfigManager
@@ -29,6 +29,7 @@ from termplus.protocols.vnc.widget import VNCWidget
 from termplus.ui.connections.detached_window import DetachedTabWindow
 from termplus.ui.connections.session_status_bar import SessionStatusBar
 from termplus.ui.connections.tab_bar import ConnectionTabBar
+from termplus.ui.connections.split_container import SplitContainer
 from termplus.ui.connections.terminal_widget import TerminalWidget
 from termplus.ui.dialogs.host_key_dialog import HostKeyDialog
 from termplus.ui.widgets.empty_state import EmptyState
@@ -99,6 +100,8 @@ class ConnectionsPage(QWidget):
         self._sessions: dict[str, tuple[QWidget, AbstractConnection | None]] = {}
         self._detached_windows: dict[str, DetachedTabWindow] = {}
         self._history_records: dict[str, int] = {}  # tab_id → history record id
+        self._tab_host_ids: dict[str, int] = {}  # tab_id → host_id (for split-clone)
+        self._split_sub_conns: dict[str, list[tuple[str, AbstractConnection]]] = {}  # tab_id → [(sub_id, conn)]
 
         self._pool.connection_count_changed.connect(self.connection_count_changed.emit)
         self._host_key_verify_signal.connect(lambda fn: fn())
@@ -172,6 +175,7 @@ class ConnectionsPage(QWidget):
 
         self._sessions[tab_id] = (terminal, conn)
         self._pool.add(tab_id, conn, host_id=host.id)
+        self._tab_host_ids[tab_id] = host.id
 
         self._tab_bar.add_tab(
             tab_id, label, protocol="SSH", color=host.color_label,
@@ -398,6 +402,10 @@ class ConnectionsPage(QWidget):
         monitor = self._monitors.pop(tab_id, None)
         if monitor:
             monitor.stop()
+        # Close sub-connections from split panels
+        for sub_id, sub_conn in self._split_sub_conns.pop(tab_id, []):
+            sub_conn.close()
+            self._pool.remove(sub_id)
         session = self._sessions.pop(tab_id, None)
         if session:
             widget, conn = session
@@ -410,6 +418,7 @@ class ConnectionsPage(QWidget):
         if rec_id and self._history:
             self._history.record_disconnect(rec_id)
         self._pool.remove(tab_id)
+        self._tab_host_ids.pop(tab_id, None)
         self._tab_bar.remove_tab(tab_id)
 
         if not self._sessions:
@@ -529,8 +538,7 @@ class ConnectionsPage(QWidget):
         widget, conn = session
 
         # Freeze resize to preserve terminal buffer during reparenting
-        if hasattr(widget, '_freeze_resize'):
-            widget._freeze_resize = True
+        self._freeze_all_terminals(widget, True)
 
         # Remove from stack and tab bar (keep session alive)
         self._terminal_stack.removeWidget(widget)
@@ -545,7 +553,6 @@ class ConnectionsPage(QWidget):
         win.show()
 
         # Unfreeze and recalculate after layout settles
-        from PySide6.QtCore import QTimer
         QTimer.singleShot(200, lambda w=widget, c=conn: self._refresh_detached(w, c))
 
         if not self._tab_bar.tab_count:
@@ -554,19 +561,26 @@ class ConnectionsPage(QWidget):
     @staticmethod
     def _refresh_detached(widget: QWidget, conn: AbstractConnection | None) -> None:
         """Force widget refresh after detaching into a floating window."""
-        # Unfreeze resize and recompute for new container size
-        if hasattr(widget, '_freeze_resize'):
-            widget._freeze_resize = False
-            if hasattr(widget, '_recompute_size'):
-                widget._recompute_size()
+        ConnectionsPage._freeze_all_terminals(widget, False)
         widget.update()
-        # For SSH terminals, resize PTY and send Ctrl+L to force redraw
-        if conn and hasattr(widget, '_cols') and hasattr(widget, '_rows'):
-            cols, rows = widget._cols, widget._rows
-            conn.resize(cols, rows)
-            # Ctrl+L forces bash/zsh/vim to redraw the screen
-            if hasattr(conn, 'send'):
-                conn.send(b'\x0c')
+        if isinstance(widget, SplitContainer):
+            # Refresh each panel's terminal
+            for panel in widget.panels:
+                t = panel.terminal
+                t._recompute_size()
+                t.update()
+                if panel.connection and hasattr(panel.connection, 'resize'):
+                    panel.connection.resize(t._cols, t._rows)
+                    if hasattr(panel.connection, 'send'):
+                        panel.connection.send(b'\x0c')
+        else:
+            # For SSH terminals, resize PTY and send Ctrl+L to force redraw
+            if conn and hasattr(widget, '_cols') and hasattr(widget, '_rows'):
+                cols, rows = widget._cols, widget._rows
+                conn.resize(cols, rows)
+                # Ctrl+L forces bash/zsh/vim to redraw the screen
+                if hasattr(conn, 'send'):
+                    conn.send(b'\x0c')
 
     def _on_tab_dock(self, tab_id: str) -> None:
         """Re-dock a floating window back into the tab bar."""
@@ -585,8 +599,7 @@ class ConnectionsPage(QWidget):
             return
 
         # Freeze resize during reparenting
-        if hasattr(widget, '_freeze_resize'):
-            widget._freeze_resize = True
+        self._freeze_all_terminals(widget, True)
 
         # Re-add to stack and tab bar
         self._terminal_stack.addWidget(widget)
@@ -599,7 +612,6 @@ class ConnectionsPage(QWidget):
         widget.setFocus()
 
         # Unfreeze and refresh after layout settles
-        from PySide6.QtCore import QTimer
         QTimer.singleShot(200, lambda w=widget, c=session[1]: self._refresh_detached(w, c))
 
         win.close_for_dock()
@@ -607,6 +619,10 @@ class ConnectionsPage(QWidget):
     def _on_detached_close(self, tab_id: str) -> None:
         """Handle closing of a detached window — full session cleanup."""
         self._detached_windows.pop(tab_id, None)
+        # Close sub-connections from split panels
+        for sub_id, sub_conn in self._split_sub_conns.pop(tab_id, []):
+            sub_conn.close()
+            self._pool.remove(sub_id)
         session = self._sessions.pop(tab_id, None)
         if session:
             widget, conn = session
@@ -617,6 +633,169 @@ class ConnectionsPage(QWidget):
         if rec_id and self._history:
             self._history.record_disconnect(rec_id)
         self._pool.remove(tab_id)
+        self._tab_host_ids.pop(tab_id, None)
+
+    # ------------------------------------------------------------------
+    # Split view & Broadcast
+    # ------------------------------------------------------------------
+
+    def split_vertical(self) -> None:
+        """Split the active terminal vertically (side by side)."""
+        self._do_split(Qt.Orientation.Horizontal)
+
+    def split_horizontal(self) -> None:
+        """Split the active terminal horizontally (top / bottom)."""
+        self._do_split(Qt.Orientation.Vertical)
+
+    def _do_split(self, orientation: Qt.Orientation) -> None:
+        active = self._tab_bar.active_tab
+        if not active or active not in self._sessions:
+            return
+        wrapped_existing_terminal = False
+        widget, conn = self._sessions[active]
+        # Only SSH terminals support split
+        if conn is None or conn.protocol != "ssh":
+            return
+        host_id = self._tab_host_ids.get(active)
+        if host_id is None:
+            return
+        host = self._host_manager.get_host(host_id)
+        if host is None:
+            return
+
+        # Create new terminal + connection for the new panel
+        new_terminal = TerminalWidget()
+        password, pkey = self._resolve_credentials(host)
+        hk_callback = HostKeyVerifyCallback(self._verify_host_key)
+        new_conn = SSHConnection(
+            hostname=host.address,
+            port=host.ssh_port,
+            username=self._resolve_username(host),
+            password=password,
+            pkey=pkey,
+            keep_alive=host.ssh_keep_alive,
+            agent_forwarding=host.ssh_agent_forwarding,
+            compression=host.ssh_compression,
+            host_key_callback=hk_callback,
+        )
+        # Wire signals for the new sub-connection
+        new_conn.data_received.connect(new_terminal.feed)
+        new_conn.connected.connect(new_terminal.clear_overlay)
+        new_terminal.input_ready.connect(new_conn.send)
+        new_terminal.size_changed.connect(new_conn.resize)
+
+        label = host.label or host.address
+
+        if isinstance(widget, SplitContainer):
+            container = widget
+        else:
+            # First split — wrap the existing terminal in a SplitContainer
+            assert isinstance(widget, TerminalWidget)
+            wrapped_existing_terminal = True
+            widget._freeze_resize = True
+            self._terminal_stack.removeWidget(widget)
+            container = SplitContainer(widget, conn, host_id, label)
+            container.all_panels_closed.connect(
+                lambda tid=active: self._on_tab_close(tid)
+            )
+            container.panel_removed.connect(
+                lambda panel_id, tid=active: self._on_split_panel_removed(tid, panel_id)
+            )
+            self._terminal_stack.addWidget(container)
+            self._terminal_stack.setCurrentWidget(container)
+            self._sessions[active] = (container, conn)
+            widget._freeze_resize = False
+            # removeWidget() hides the old terminal; ensure it becomes visible in split panel.
+            widget.show()
+
+        panel = container.split(orientation, new_terminal, new_conn, host_id, label)
+        if panel is None:
+            # Panel limit reached
+            new_conn.close()
+            return
+
+        if wrapped_existing_terminal:
+            # First split is sensitive to timing; refresh after splitter geometry settles.
+            QTimer.singleShot(120, lambda c=container: self._refresh_split_layout(c))
+            QTimer.singleShot(320, lambda c=container: self._refresh_split_layout(c))
+
+        # Track sub-connection
+        sub_id = f"{active}:{panel.panel_id}"
+        self._pool.add(sub_id, new_conn, host_id=host.id)
+        subs = self._split_sub_conns.setdefault(active, [])
+        subs.append((sub_id, new_conn))
+
+        new_terminal.show_overlay(f"Connecting to {host.address}:{host.ssh_port}...")
+        asyncio.ensure_future(self._connect_split_async(new_conn, host))
+
+    @staticmethod
+    def _refresh_split_layout(container: SplitContainer) -> None:
+        """Recompute panel sizes and force SSH redraw after split layout settles."""
+        for panel in container.panels:
+            terminal = panel.terminal
+            terminal.show()
+            terminal._freeze_resize = False
+            terminal._recompute_size()
+            terminal.update()
+
+            conn = panel.connection
+            if conn is None:
+                continue
+            if hasattr(conn, "resize") and hasattr(terminal, "_cols") and hasattr(terminal, "_rows"):
+                conn.resize(terminal._cols, terminal._rows)
+            if hasattr(conn, "send"):
+                try:
+                    conn.send(b"\x0c")
+                except Exception:
+                    logger.debug("Redraw send failed for split panel %s", panel.panel_id)
+
+    def _on_split_panel_removed(self, tab_id: str, panel_id: str) -> None:
+        """Remove split sub-connection bookkeeping when panel is closed from header."""
+        sub_id = f"{tab_id}:{panel_id}"
+        subs = self._split_sub_conns.get(tab_id)
+        if not subs:
+            return
+        remaining = [(sid, conn) for sid, conn in subs if sid != sub_id]
+        if len(remaining) != len(subs):
+            self._pool.remove(sub_id)
+            if remaining:
+                self._split_sub_conns[tab_id] = remaining
+            else:
+                self._split_sub_conns.pop(tab_id, None)
+
+    async def _connect_split_async(
+        self, conn: SSHConnection, host: Host,
+    ) -> None:
+        """Asynchronously connect a split panel."""
+        try:
+            await conn.connect()
+            logger.info("Split panel connected to %s", host.address)
+        except Exception as exc:
+            logger.error("Split panel connection to %s failed: %s", host.address, exc)
+
+    def toggle_broadcast(self) -> None:
+        """Toggle broadcast mode on the active tab's split container."""
+        active = self._tab_bar.active_tab
+        if not active or active not in self._sessions:
+            return
+        widget, _ = self._sessions[active]
+        if isinstance(widget, SplitContainer):
+            widget.set_broadcast(not widget.broadcast_mode)
+        else:
+            from termplus.ui.widgets.toast import ToastManager
+            ToastManager.instance().show_toast(
+                "Split the terminal first to use Broadcast Mode.",
+                toast_type="info",
+            )
+
+    @staticmethod
+    def _freeze_all_terminals(widget: QWidget, freeze: bool) -> None:
+        """Freeze or unfreeze resize on all terminals within a widget."""
+        if isinstance(widget, SplitContainer):
+            for panel in widget.panels:
+                panel.terminal._freeze_resize = freeze
+        elif hasattr(widget, '_freeze_resize'):
+            widget._freeze_resize = freeze
 
     def close_current_tab(self) -> None:
         """Close the currently active tab."""
@@ -655,6 +834,13 @@ class ConnectionsPage(QWidget):
             return False
         widget, conn = self._sessions[active]
         if conn is None or isinstance(conn, (VNCConnection, RDPConnection)):
+            return False
+        # Split view — send to the focused panel
+        if isinstance(widget, SplitContainer):
+            panel = widget.focused_panel
+            if panel and panel.connection:
+                panel.connection.send(script.encode("utf-8") + b"\n")
+                return True
             return False
         conn.send(script.encode("utf-8") + b"\n")
         return True
