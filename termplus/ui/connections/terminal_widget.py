@@ -18,7 +18,7 @@ from PySide6.QtGui import (
     QResizeEvent,
     QWheelEvent,
 )
-from PySide6.QtWidgets import QApplication, QWidget
+from PySide6.QtWidgets import QApplication, QScrollBar, QWidget
 
 logger = logging.getLogger(__name__)
 
@@ -90,6 +90,9 @@ _APP_CURSOR_MAP: dict[int, bytes] = {
     Qt.Key.Key_End: b"\x1bOF",
 }
 
+_MIN_FONT_SIZE = 8
+_MAX_FONT_SIZE = 32
+
 
 class TerminalWidget(QWidget):
     """QPainter-based terminal emulator widget backed by pyte."""
@@ -142,6 +145,15 @@ class TerminalWidget(QWidget):
         self._cursor_timer.timeout.connect(self._blink_cursor)
         self._cursor_timer.start(530)
 
+        # Debounced PTY resize emission (prevents prompt spam on rapid zoom/resize).
+        self._pending_resize: tuple[int, int] | None = None
+        self._resize_emit_timer = QTimer(self)
+        self._resize_emit_timer.setSingleShot(True)
+        self._resize_emit_timer.setInterval(120)
+        self._resize_emit_timer.timeout.connect(self._emit_queued_resize)
+        self._suppress_pty_resize_emit = False
+        self._suppress_screen_resize = False
+
         # Selection state
         self._selecting = False
         self._sel_start: tuple[int, int] | None = None  # (col, row)
@@ -164,9 +176,17 @@ class TerminalWidget(QWidget):
         # Freeze resize flag — set during detach/dock to preserve pyte buffer
         self._freeze_resize = False
 
+        # Scrollbar (visible history slider on the right)
+        self._scrollbar_width = 12
+        self._v_scrollbar = QScrollBar(Qt.Orientation.Vertical, self)
+        self._v_scrollbar.setSingleStep(1)
+        self._v_scrollbar.valueChanged.connect(self._on_scrollbar_changed)
+
         self.setMinimumSize(
-            int(self._cell_width * 20), int(self._cell_height * 5)
+            int(self._cell_width * 20) + self._scrollbar_width, int(self._cell_height * 5)
         )
+        self._layout_scrollbar()
+        self._sync_scrollbar_from_offset()
 
     # --- Public API ---
 
@@ -199,6 +219,7 @@ class TerminalWidget(QWidget):
         if self._scroll_offset > 0:
             self._scroll_offset = 0
         self._dirty = True
+        self._sync_scrollbar_from_offset()
         self.update()
 
     def set_font(self, family: str, size: int) -> None:
@@ -219,6 +240,7 @@ class TerminalWidget(QWidget):
         self._ascent = fm.ascent()
 
         self._recompute_size()
+        self._sync_scrollbar_from_offset()
         self.update()
 
     # --- Rendering ---
@@ -234,12 +256,13 @@ class TerminalWidget(QWidget):
             screen = self._screen
             cw = self._cell_width
             ch = self._cell_height
+            visible_lines = self._get_visible_lines()
 
             for row_idx in range(self._rows):
                 y = row_idx * ch
 
-                # Get screen buffer line (accounting for scroll offset)
-                line = screen.buffer.get(row_idx, {})
+                # Visible line in viewport (history + current buffer)
+                line = visible_lines[row_idx] if row_idx < len(visible_lines) else {}
 
                 for col_idx in range(self._cols):
                     char = line.get(col_idx, screen.default_char)
@@ -343,7 +366,19 @@ class TerminalWidget(QWidget):
         modifiers = event.modifiers()
         key = event.key()
 
-        # Ctrl+Shift+C → copy
+        # Ctrl+Shift++ / Ctrl+Shift+- -> terminal font zoom
+        if (
+            modifiers & Qt.KeyboardModifier.ControlModifier
+            and modifiers & Qt.KeyboardModifier.ShiftModifier
+        ):
+            if key in (Qt.Key.Key_Plus, Qt.Key.Key_Equal):
+                self._adjust_font_size(1)
+                return
+            if key in (Qt.Key.Key_Minus, Qt.Key.Key_Underscore):
+                self._adjust_font_size(-1)
+                return
+
+        # Ctrl+Shift+C -> copy
         if (
             modifiers == (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier)
             and key == Qt.Key.Key_C
@@ -351,7 +386,7 @@ class TerminalWidget(QWidget):
             self._copy_selection()
             return
 
-        # Ctrl+Shift+V → paste
+        # Ctrl+Shift+V -> paste
         if (
             modifiers == (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier)
             and key == Qt.Key.Key_V
@@ -402,7 +437,8 @@ class TerminalWidget(QWidget):
     def mouseDoubleClickEvent(self, event) -> None:
         """Double-click selects a word."""
         col, row = self._pos_to_cell(event.position())
-        line = self._screen.buffer.get(row, {})
+        visible_lines = self._get_visible_lines()
+        line = visible_lines[row] if row < len(visible_lines) else {}
 
         # Find word boundaries
         start = col
@@ -424,38 +460,182 @@ class TerminalWidget(QWidget):
 
     def wheelEvent(self, event: QWheelEvent) -> None:
         delta = event.angleDelta().y()
-        history_len = len(self._screen.history.top)
+        max_offset = self._max_scroll_offset()
+        if max_offset <= 0:
+            return
         if delta > 0:
             # Scroll up into history
             self._scroll_offset = min(
-                self._scroll_offset + 3, history_len
+                self._scroll_offset + 3, max_offset
             )
         else:
             # Scroll down
             self._scroll_offset = max(self._scroll_offset - 3, 0)
+        self._sync_scrollbar_from_offset()
         self.update()
 
     # --- Resize ---
 
     def resizeEvent(self, event: QResizeEvent) -> None:
         super().resizeEvent(event)
+        self._layout_scrollbar()
         self._recompute_size()
 
     def _recompute_size(self) -> None:
-        if self.width() < 10 or self.height() < 10:
+        if self._content_width() < 10 or self.height() < 10:
             return  # skip resize during reparenting
         if self._freeze_resize:
             return  # skip resize while detaching (preserves pyte buffer)
-        new_cols = max(1, int(self.width() / self._cell_width))
+        new_cols = max(1, int(self._content_width() / self._cell_width))
         new_rows = max(1, int(self.height() / self._cell_height))
         if new_cols != self._cols or new_rows != self._rows:
             self._cols = new_cols
             self._rows = new_rows
-            self._screen.resize(new_rows, new_cols)
-            self.size_changed.emit(new_cols, new_rows)
-            self.update()
+            if not self._suppress_screen_resize:
+                self._resize_screen_preserving_content(new_rows, new_cols)
+                if not self._suppress_pty_resize_emit:
+                    self._queue_resize_emit(new_cols, new_rows)
+        self._sync_scrollbar_from_offset()
+        self.update()
 
     # --- Private helpers ---
+
+    def _adjust_font_size(self, delta: int) -> None:
+        current = self._font.pointSize()
+        new_size = max(_MIN_FONT_SIZE, min(_MAX_FONT_SIZE, current + delta))
+        if new_size != current:
+            prev_offset = self._scroll_offset
+            # Keep zoom local to renderer; avoid PTY resize prompt redraw spam.
+            self._pending_resize = None
+            self._resize_emit_timer.stop()
+            self._suppress_pty_resize_emit = True
+            self._suppress_screen_resize = True
+            try:
+                self.set_font(self._font.family(), new_size)
+            finally:
+                self._suppress_pty_resize_emit = False
+                self._suppress_screen_resize = False
+            # Keep current history position after zoom (natural terminal behavior).
+            self._scroll_offset = prev_offset
+            self._sync_scrollbar_from_offset()
+
+    def _queue_resize_emit(self, cols: int, rows: int) -> None:
+        self._pending_resize = (cols, rows)
+        self._resize_emit_timer.start()
+
+    def _emit_queued_resize(self) -> None:
+        if self._pending_resize is None:
+            return
+        cols, rows = self._pending_resize
+        self._pending_resize = None
+        self.size_changed.emit(cols, rows)
+
+    def _content_width(self) -> int:
+        return max(1, self.width() - self._scrollbar_width)
+
+    def _layout_scrollbar(self) -> None:
+        self._v_scrollbar.setGeometry(
+            self.width() - self._scrollbar_width,
+            0,
+            self._scrollbar_width,
+            self.height(),
+        )
+
+    def _max_scroll_offset(self) -> int:
+        return max(0, len(self._screen.history.top))
+
+    def _sync_scrollbar_from_offset(self) -> None:
+        max_offset = self._max_scroll_offset()
+        self._scroll_offset = max(0, min(self._scroll_offset, max_offset))
+        self._v_scrollbar.blockSignals(True)
+        self._v_scrollbar.setRange(0, max_offset)
+        self._v_scrollbar.setPageStep(max(1, self._rows))
+        self._v_scrollbar.setValue(max_offset - self._scroll_offset)
+        self._v_scrollbar.setEnabled(max_offset > 0)
+        self._v_scrollbar.blockSignals(False)
+
+    def _on_scrollbar_changed(self, value: int) -> None:
+        max_offset = self._max_scroll_offset()
+        self._scroll_offset = max_offset - value
+        self.update()
+
+    def _resize_screen_preserving_content(self, new_rows: int, new_cols: int) -> None:
+        """Resize pyte screen without line duplication artifacts.
+
+        pyte.HistoryScreen.resize() can duplicate trailing rows when rows shrink/grow
+        repeatedly. Build a new screen from existing history + visible rows instead.
+        """
+        old_screen = self._screen
+        if new_rows == old_screen.lines and new_cols == old_screen.columns:
+            return
+
+        old_history = list(old_screen.history.top)
+        old_rows = [old_screen.buffer.get(row, {}) for row in range(old_screen.lines)]
+        all_lines = [dict(line) for line in (old_history + old_rows)]
+
+        # Keep only scrollback + viewport tail.
+        max_total = max(1, self._scrollback + new_rows)
+        if len(all_lines) > max_total:
+            all_lines = all_lines[-max_total:]
+
+        # Ensure the new viewport is fully populated with empty rows when needed.
+        if len(all_lines) < new_rows:
+            all_lines = ([{}] * (new_rows - len(all_lines))) + all_lines
+
+        history_lines = all_lines[:-new_rows] if len(all_lines) > new_rows else []
+        buffer_lines = all_lines[-new_rows:]
+
+        new_screen = pyte.HistoryScreen(new_cols, new_rows, history=self._scrollback)
+        new_screen.set_mode(pyte.modes.LNM)
+        new_screen.mode = set(old_screen.mode)
+        new_screen.charset = old_screen.charset
+        new_screen.g0_charset = old_screen.g0_charset
+        new_screen.g1_charset = old_screen.g1_charset
+        new_screen.icon_name = old_screen.icon_name
+        new_screen.title = old_screen.title
+
+        def _clip_line(line: dict) -> dict:
+            if not line:
+                return {}
+            return {col: char for col, char in line.items() if col < new_cols}
+
+        for line in history_lines:
+            new_screen.history.top.append(_clip_line(line))
+
+        for row, line in enumerate(buffer_lines):
+            clipped = _clip_line(line)
+            if clipped:
+                new_screen.buffer[row] = clipped
+
+        old_abs_cursor = len(old_history) + max(0, min(old_screen.cursor.y, old_screen.lines - 1))
+        visible_total = len(all_lines)
+        old_total = len(old_history) + old_screen.lines
+        crop_start = max(0, old_total - visible_total)
+        new_abs_cursor = max(0, old_abs_cursor - crop_start)
+        history_len = len(history_lines)
+        new_screen.cursor.y = max(0, min(new_rows - 1, new_abs_cursor - history_len))
+        new_screen.cursor.x = max(0, min(new_cols - 1, old_screen.cursor.x))
+
+        self._screen = new_screen
+        self._stream.detach(old_screen)
+        self._stream.attach(new_screen)
+
+    def _get_visible_lines(self) -> list[dict]:
+        history = list(self._screen.history.top)
+        screen_rows = getattr(self._screen, "lines", self._rows)
+        start_row = max(0, screen_rows - self._rows)
+        current = [
+            self._screen.buffer.get(start_row + row, {})
+            for row in range(self._rows)
+        ]
+        lines = history + current
+        if not lines:
+            return [{} for _ in range(self._rows)]
+        start = max(0, len(lines) - self._rows - self._scroll_offset)
+        visible = lines[start:start + self._rows]
+        if len(visible) < self._rows:
+            visible.extend({} for _ in range(self._rows - len(visible)))
+        return visible
 
     def _blink_cursor(self) -> None:
         self._cursor_visible = not self._cursor_visible
@@ -562,3 +742,4 @@ class TerminalWidget(QWidget):
             text = clipboard.text()
             if text:
                 self.input_ready.emit(text.encode("utf-8"))
+

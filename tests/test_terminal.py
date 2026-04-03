@@ -118,6 +118,116 @@ def test_terminal_ctrl_c(terminal, qtbot):
     assert signals == [b"\x03"]
 
 
+def test_terminal_font_zoom_shortcuts(terminal):
+    from PySide6.QtCore import Qt
+    from PySide6.QtGui import QKeyEvent
+
+    initial = terminal._font.pointSize()
+
+    zoom_in = QKeyEvent(
+        QKeyEvent.Type.KeyPress,
+        Qt.Key.Key_Equal,
+        Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier,
+        "+",
+    )
+    terminal.keyPressEvent(zoom_in)
+    assert terminal._font.pointSize() == initial + 1
+
+    zoom_out = QKeyEvent(
+        QKeyEvent.Type.KeyPress,
+        Qt.Key.Key_Minus,
+        Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier,
+        "-",
+    )
+    terminal.keyPressEvent(zoom_out)
+    assert terminal._font.pointSize() == initial
+
+
+def test_terminal_scrollbar_works_with_history(terminal):
+    # generate enough output to fill scrollback above visible rows
+    payload = b"".join(f"line{i}\r\n".encode("utf-8") for i in range(60))
+    terminal.feed(payload)
+
+    assert terminal._v_scrollbar.maximum() > 0
+    assert terminal._v_scrollbar.isEnabled()
+
+    # top of scrollbar should map to maximum scroll offset
+    terminal._v_scrollbar.setValue(0)
+    assert terminal._scroll_offset == terminal._v_scrollbar.maximum()
+
+
+def test_terminal_zoom_keeps_scroll_position(terminal):
+    from PySide6.QtCore import Qt
+    from PySide6.QtGui import QKeyEvent
+
+    payload = b"".join(f"line{i}\r\n".encode("utf-8") for i in range(80))
+    terminal.feed(payload)
+    terminal._v_scrollbar.setValue(0)
+    prev_offset = terminal._scroll_offset
+    assert prev_offset > 0
+
+    zoom_in = QKeyEvent(
+        QKeyEvent.Type.KeyPress,
+        Qt.Key.Key_Equal,
+        Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier,
+        "+",
+    )
+    terminal.keyPressEvent(zoom_in)
+
+    assert terminal._scroll_offset == prev_offset
+
+
+def test_terminal_resize_preserves_prompt_without_duplication(terminal):
+    terminal.feed(b"".join(f"line{i}\r\n".encode("utf-8") for i in range(40)))
+    terminal.feed(b"prompt$ ")
+
+    for _ in range(4):
+        terminal._resize_screen_preserving_content(18, 80)
+        terminal._resize_screen_preserving_content(24, 80)
+
+    lines: list[str] = []
+    for row in range(terminal._screen.lines):
+        line = terminal._screen.buffer.get(row, {})
+        text = "".join(
+            line.get(col, terminal._screen.default_char).data or " "
+            for col in range(terminal._screen.columns)
+        ).rstrip()
+        if text:
+            lines.append(text)
+
+    assert lines.count("prompt$") == 1
+
+
+def test_terminal_resize_emission_is_debounced(terminal, qtbot):
+    emitted: list[tuple[int, int]] = []
+    terminal.size_changed.connect(lambda c, r: emitted.append((c, r)))
+
+    terminal._queue_resize_emit(100, 30)
+    terminal._queue_resize_emit(110, 33)
+    qtbot.wait(180)
+
+    assert emitted == [(110, 33)]
+
+
+def test_terminal_zoom_does_not_emit_pty_resize(terminal, qtbot):
+    from PySide6.QtCore import Qt
+    from PySide6.QtGui import QKeyEvent
+
+    emitted: list[tuple[int, int]] = []
+    terminal.size_changed.connect(lambda c, r: emitted.append((c, r)))
+
+    zoom_in = QKeyEvent(
+        QKeyEvent.Type.KeyPress,
+        Qt.Key.Key_Equal,
+        Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier,
+        "+",
+    )
+    terminal.keyPressEvent(zoom_in)
+    qtbot.wait(180)
+
+    assert emitted == []
+
+
 def test_terminal_color_resolution(terminal):
     """Test ANSI color name resolution."""
     from PySide6.QtGui import QColor

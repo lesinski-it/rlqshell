@@ -8,7 +8,7 @@ import logging
 import uuid
 
 from PySide6.QtCore import QTimer, Qt, Signal
-from PySide6.QtWidgets import QMessageBox, QStackedWidget, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QInputDialog, QMessageBox, QStackedWidget, QVBoxLayout, QWidget
 
 from termplus.app.config import ConfigManager
 from termplus.app.constants import Colors
@@ -656,11 +656,25 @@ class ConnectionsPage(QWidget):
         # Only SSH terminals support split
         if conn is None or conn.protocol != "ssh":
             return
-        host_id = self._tab_host_ids.get(active)
-        if host_id is None:
+        base_host_id = self._tab_host_ids.get(active)
+        if base_host_id is None:
             return
-        host = self._host_manager.get_host(host_id)
+
+        # Existing panel metadata (the currently open tab host).
+        base_host = self._host_manager.get_host(base_host_id)
+        tab_info = self._tab_bar.tab_info(active)
+        base_label = (
+            (base_host.label or base_host.address)
+            if base_host is not None
+            else (tab_info[0] if tab_info else "SSH Session")
+        )
+
+        # New split panel may target a different SSH host.
+        host = self._pick_split_host(active)
         if host is None:
+            return
+        host_id = host.id
+        if host_id is None:
             return
 
         # Create new terminal + connection for the new panel
@@ -694,7 +708,7 @@ class ConnectionsPage(QWidget):
             wrapped_existing_terminal = True
             widget._freeze_resize = True
             self._terminal_stack.removeWidget(widget)
-            container = SplitContainer(widget, conn, host_id, label)
+            container = SplitContainer(widget, conn, base_host_id, base_label)
             container.all_panels_closed.connect(
                 lambda tid=active: self._on_tab_close(tid)
             )
@@ -727,6 +741,45 @@ class ConnectionsPage(QWidget):
 
         new_terminal.show_overlay(f"Connecting to {host.address}:{host.ssh_port}...")
         asyncio.ensure_future(self._connect_split_async(new_conn, host))
+
+    def _pick_split_host(self, active_tab_id: str) -> Host | None:
+        """Ask user which SSH host should be used for a new split panel."""
+        hosts = [h for h in self._host_manager.list_hosts(protocol="ssh") if h.id is not None]
+        if not hosts:
+            from termplus.ui.widgets.toast import ToastManager
+            ToastManager.instance().show_toast(
+                "No SSH hosts available in Vault.",
+                toast_type="warning",
+            )
+            return None
+
+        if len(hosts) == 1:
+            return hosts[0]
+
+        current_host_id = self._tab_host_ids.get(active_tab_id)
+        items: list[str] = []
+        host_by_item: dict[str, Host] = {}
+        default_index = 0
+
+        for idx, host in enumerate(hosts):
+            host_label = host.label or host.address
+            item = f"{host_label} ({host.address}) [id:{host.id}]"
+            items.append(item)
+            host_by_item[item] = host
+            if host.id == current_host_id:
+                default_index = idx
+
+        selected, ok = QInputDialog.getItem(
+            self,
+            "Split Panel Host",
+            "Select SSH host for the new split panel:",
+            items,
+            default_index,
+            False,
+        )
+        if not ok:
+            return None
+        return host_by_item.get(selected)
 
     @staticmethod
     def _refresh_split_layout(container: SplitContainer) -> None:
