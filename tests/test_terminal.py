@@ -198,6 +198,34 @@ def test_terminal_resize_preserves_prompt_without_duplication(terminal):
     assert lines.count("prompt$") == 1
 
 
+def test_terminal_grow_resize_keeps_top_anchor_and_prompt_row(terminal):
+    terminal.feed(b"line1\r\nline2\r\nline3\r\nprompt$ ")
+    old_cursor_y = terminal._screen.cursor.y
+
+    terminal._resize_screen_preserving_content(40, 80)
+
+    first_non_empty: int | None = None
+    for row in range(terminal._screen.lines):
+        line = terminal._screen.buffer.get(row, {})
+        text = "".join(
+            line.get(col, terminal._screen.default_char).data or " "
+            for col in range(terminal._screen.columns)
+        ).rstrip()
+        if text:
+            first_non_empty = row
+            break
+
+    prompt_line = terminal._screen.buffer.get(old_cursor_y, {})
+    prompt_text = "".join(
+        prompt_line.get(col, terminal._screen.default_char).data or " "
+        for col in range(16)
+    ).rstrip()
+
+    assert first_non_empty == 0
+    assert terminal._screen.cursor.y == old_cursor_y
+    assert prompt_text.startswith("prompt$")
+
+
 def test_terminal_resize_emission_is_debounced(terminal, qtbot):
     emitted: list[tuple[int, int]] = []
     terminal.size_changed.connect(lambda c, r: emitted.append((c, r)))

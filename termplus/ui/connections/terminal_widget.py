@@ -579,8 +579,10 @@ class TerminalWidget(QWidget):
             all_lines = all_lines[-max_total:]
 
         # Ensure the new viewport is fully populated with empty rows when needed.
+        # Extra rows are appended at the bottom (top-anchored growth), which matches
+        # terminal behavior during window maximize/resize.
         if len(all_lines) < new_rows:
-            all_lines = ([{}] * (new_rows - len(all_lines))) + all_lines
+            all_lines = all_lines + ([{}] * (new_rows - len(all_lines)))
 
         history_lines = all_lines[:-new_rows] if len(all_lines) > new_rows else []
         buffer_lines = all_lines[-new_rows:]

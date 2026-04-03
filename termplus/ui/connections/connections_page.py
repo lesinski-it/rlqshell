@@ -571,15 +571,17 @@ class ConnectionsPage(QWidget):
                 t.update()
                 if panel.connection and hasattr(panel.connection, 'resize'):
                     panel.connection.resize(t._cols, t._rows)
-                    if hasattr(panel.connection, 'send'):
+                    if (
+                        hasattr(panel.connection, 'send')
+                        and ConnectionsPage._terminal_needs_redraw(t)
+                    ):
                         panel.connection.send(b'\x0c')
         else:
-            # For SSH terminals, resize PTY and send Ctrl+L to force redraw
+            # For SSH terminals, resize PTY. Send Ctrl+L only if viewport is blank.
             if conn and hasattr(widget, '_cols') and hasattr(widget, '_rows'):
                 cols, rows = widget._cols, widget._rows
                 conn.resize(cols, rows)
-                # Ctrl+L forces bash/zsh/vim to redraw the screen
-                if hasattr(conn, 'send'):
+                if hasattr(conn, 'send') and ConnectionsPage._terminal_needs_redraw(widget):
                     conn.send(b'\x0c')
 
     def _on_tab_dock(self, tab_id: str) -> None:
@@ -652,6 +654,7 @@ class ConnectionsPage(QWidget):
         if not active or active not in self._sessions:
             return
         wrapped_existing_terminal = False
+        froze_existing_terminals = False
         widget, conn = self._sessions[active]
         # Only SSH terminals support split
         if conn is None or conn.protocol != "ssh":
@@ -679,6 +682,8 @@ class ConnectionsPage(QWidget):
 
         # Create new terminal + connection for the new panel
         new_terminal = TerminalWidget()
+        # Prevent transient splitter geometry changes from mutating pyte buffer.
+        new_terminal._freeze_resize = True
         password, pkey = self._resolve_credentials(host)
         hk_callback = HostKeyVerifyCallback(self._verify_host_key)
         new_conn = SSHConnection(
@@ -702,6 +707,8 @@ class ConnectionsPage(QWidget):
 
         if isinstance(widget, SplitContainer):
             container = widget
+            self._freeze_all_terminals(container, True)
+            froze_existing_terminals = True
         else:
             # First split — wrap the existing terminal in a SplitContainer
             assert isinstance(widget, TerminalWidget)
@@ -718,20 +725,22 @@ class ConnectionsPage(QWidget):
             self._terminal_stack.addWidget(container)
             self._terminal_stack.setCurrentWidget(container)
             self._sessions[active] = (container, conn)
-            widget._freeze_resize = False
             # removeWidget() hides the old terminal; ensure it becomes visible in split panel.
             widget.show()
 
         panel = container.split(orientation, new_terminal, new_conn, host_id, label)
         if panel is None:
             # Panel limit reached
+            if wrapped_existing_terminal or froze_existing_terminals:
+                self._freeze_all_terminals(container, False)
+            new_terminal._freeze_resize = False
             new_conn.close()
             return
 
-        if wrapped_existing_terminal:
-            # First split is sensitive to timing; refresh after splitter geometry settles.
-            QTimer.singleShot(120, lambda c=container: self._refresh_split_layout(c))
-            QTimer.singleShot(320, lambda c=container: self._refresh_split_layout(c))
+        # Split operations can trigger transient resize events with temporary geometry.
+        # Refresh after splitter layout settles and only then unfreeze panel terminals.
+        QTimer.singleShot(120, lambda c=container: self._refresh_split_layout(c))
+        QTimer.singleShot(320, lambda c=container: self._refresh_split_layout(c))
 
         # Track sub-connection
         sub_id = f"{active}:{panel.panel_id}"
@@ -783,7 +792,7 @@ class ConnectionsPage(QWidget):
 
     @staticmethod
     def _refresh_split_layout(container: SplitContainer) -> None:
-        """Recompute panel sizes and force SSH redraw after split layout settles."""
+        """Recompute panel sizes and redraw only blank panels after split settle."""
         for panel in container.panels:
             terminal = panel.terminal
             terminal.show()
@@ -796,11 +805,28 @@ class ConnectionsPage(QWidget):
                 continue
             if hasattr(conn, "resize") and hasattr(terminal, "_cols") and hasattr(terminal, "_rows"):
                 conn.resize(terminal._cols, terminal._rows)
-            if hasattr(conn, "send"):
+            if hasattr(conn, "send") and ConnectionsPage._terminal_needs_redraw(terminal):
                 try:
                     conn.send(b"\x0c")
                 except Exception:
                     logger.debug("Redraw send failed for split panel %s", panel.panel_id)
+
+    @staticmethod
+    def _terminal_needs_redraw(widget: QWidget) -> bool:
+        """Heuristic: redraw only when the terminal viewport is visually empty."""
+        if not isinstance(widget, TerminalWidget):
+            return False
+        if not hasattr(widget, "_get_visible_lines"):
+            return False
+        try:
+            for line in widget._get_visible_lines():
+                for char in line.values():
+                    data = getattr(char, "data", "")
+                    if data and data.strip():
+                        return False
+        except Exception:
+            return False
+        return True
 
     def _on_split_panel_removed(self, tab_id: str, panel_id: str) -> None:
         """Remove split sub-connection bookkeeping when panel is closed from header."""

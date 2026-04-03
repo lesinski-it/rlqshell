@@ -5,6 +5,7 @@ from __future__ import annotations
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QPushButton
 
+from termplus.ui.connections.connections_page import ConnectionsPage
 from termplus.ui.connections.split_container import SplitContainer
 from termplus.ui.connections.terminal_widget import TerminalWidget
 
@@ -20,6 +21,18 @@ class _DummyConnection:
 
     def send(self, _data: bytes) -> None:
         pass
+
+
+class _TrackingConnection(_DummyConnection):
+    def __init__(self) -> None:
+        self.sent: list[bytes] = []
+        self.resized: list[tuple[int, int]] = []
+
+    def resize(self, cols: int, rows: int) -> None:
+        self.resized.append((cols, rows))
+
+    def send(self, data: bytes) -> None:
+        self.sent.append(data)
 
 
 def _line_text(term: TerminalWidget, width: int) -> str:
@@ -76,3 +89,34 @@ def test_hidden_terminal_is_shown_after_reparent_to_split(qtbot):
     qtbot.wait(10)
 
     assert term.isVisible()
+
+
+def test_refresh_split_layout_nonblank_panel_does_not_send_ctrl_l(qtbot):
+    term = TerminalWidget(cols=80, rows=24)
+    term.feed(b"ready$ ")
+    conn = _TrackingConnection()
+    container = SplitContainer(term, conn, 1, "host")
+    qtbot.addWidget(container)
+    container.resize(900, 600)
+    container.show()
+    qtbot.wait(10)
+
+    ConnectionsPage._refresh_split_layout(container)
+
+    assert conn.resized
+    assert conn.sent == []
+
+
+def test_refresh_split_layout_blank_panel_sends_ctrl_l(qtbot):
+    term = TerminalWidget(cols=80, rows=24)
+    conn = _TrackingConnection()
+    container = SplitContainer(term, conn, 1, "host")
+    qtbot.addWidget(container)
+    container.resize(900, 600)
+    container.show()
+    qtbot.wait(10)
+
+    ConnectionsPage._refresh_split_layout(container)
+
+    assert conn.resized
+    assert conn.sent == [b"\x0c"]
