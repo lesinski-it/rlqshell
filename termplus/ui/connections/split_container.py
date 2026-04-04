@@ -206,6 +206,7 @@ class SplitContainer(QWidget):
     """Container managing multiple split terminal panels within one tab."""
 
     all_panels_closed = Signal()
+    single_panel_remaining = Signal(object)  # the surviving SplitPanel
     broadcast_toggled = Signal(bool)
     panel_removed = Signal(str)  # panel_id
 
@@ -353,6 +354,11 @@ class SplitContainer(QWidget):
 
         if not self._panels:
             self.all_panels_closed.emit()
+        elif len(self._panels) == 1:
+            # Auto-disable broadcast — no point with a single panel
+            if self._broadcast:
+                self.set_broadcast(False)
+            self.single_panel_remaining.emit(self._panels[0])
 
     def set_broadcast(self, enabled: bool) -> None:
         """Toggle broadcast mode."""
@@ -466,15 +472,11 @@ class SplitContainer(QWidget):
             if splitter.count() == 1:
                 child = splitter.widget(0)
                 if isinstance(child, QSplitter):
-                    # Move all grandchildren into root
+                    # Collect all grandchildren by index (widget(0) doesn't remove)
                     orientation = child.orientation()
-                    widgets = [child.widget(0) for _ in range(child.count())]
-                    # Actually collect properly
-                    widgets = []
-                    while child.count() > 0:
-                        w = child.widget(0)
-                        widgets.append(w)
+                    widgets = [child.widget(i) for i in range(child.count())]
                     self._root_splitter.setOrientation(orientation)
+                    # addWidget() reparents each widget from child → root
                     for w in widgets:
                         self._root_splitter.addWidget(w)
                     child.deleteLater()

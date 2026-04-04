@@ -3,8 +3,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QByteArray
-from PySide6.QtGui import QPainter
+from PySide6.QtCore import Qt, QByteArray, QRectF
+from PySide6.QtGui import QPainter, QPainterPath, QRegion
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import QApplication, QWidget
 
@@ -31,6 +31,11 @@ class SplashScreen(QWidget):
 
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setFixedSize(_SPLASH_W, _SPLASH_H)
+        # Mask to the rounded content rect — fallback for systems where
+        # WA_TranslucentBackground is not fully supported (no compositor).
+        path = QPainterPath()
+        path.addRoundedRect(QRectF(40, 20, 600, 440), 20, 20)
+        self.setMask(QRegion(path.toFillPolygon().toPolygon()))
         self._center_on_screen()
 
     def _center_on_screen(self) -> None:

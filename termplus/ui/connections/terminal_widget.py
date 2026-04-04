@@ -152,7 +152,6 @@ class TerminalWidget(QWidget):
         self._resize_emit_timer.setInterval(120)
         self._resize_emit_timer.timeout.connect(self._emit_queued_resize)
         self._suppress_pty_resize_emit = False
-        self._suppress_screen_resize = False
 
         # Selection state
         self._selecting = False
@@ -460,6 +459,13 @@ class TerminalWidget(QWidget):
 
     def wheelEvent(self, event: QWheelEvent) -> None:
         delta = event.angleDelta().y()
+        # Ctrl+scroll = font zoom
+        if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+            if delta > 0:
+                self._adjust_font_size(1)
+            elif delta < 0:
+                self._adjust_font_size(-1)
+            return
         max_offset = self._max_scroll_offset()
         if max_offset <= 0:
             return
@@ -491,10 +497,9 @@ class TerminalWidget(QWidget):
         if new_cols != self._cols or new_rows != self._rows:
             self._cols = new_cols
             self._rows = new_rows
-            if not self._suppress_screen_resize:
-                self._resize_screen_preserving_content(new_rows, new_cols)
-                if not self._suppress_pty_resize_emit:
-                    self._queue_resize_emit(new_cols, new_rows)
+            self._resize_screen_preserving_content(new_rows, new_cols)
+            if not self._suppress_pty_resize_emit:
+                self._queue_resize_emit(new_cols, new_rows)
         self._sync_scrollbar_from_offset()
         self.update()
 
@@ -504,19 +509,18 @@ class TerminalWidget(QWidget):
         current = self._font.pointSize()
         new_size = max(_MIN_FONT_SIZE, min(_MAX_FONT_SIZE, current + delta))
         if new_size != current:
-            prev_offset = self._scroll_offset
-            # Keep zoom local to renderer; avoid PTY resize prompt redraw spam.
+            # Suppress PTY resize to avoid prompt redraw spam on the remote side,
+            # but allow the pyte screen to resize so the buffer stays in sync with
+            # the new column/row count — prevents text loss on zoom-out.
             self._pending_resize = None
             self._resize_emit_timer.stop()
             self._suppress_pty_resize_emit = True
-            self._suppress_screen_resize = True
             try:
                 self.set_font(self._font.family(), new_size)
             finally:
                 self._suppress_pty_resize_emit = False
-                self._suppress_screen_resize = False
-            # Keep current history position after zoom (natural terminal behavior).
-            self._scroll_offset = prev_offset
+            # Snap to bottom so the current prompt stays visible after zoom.
+            self._scroll_offset = 0
             self._sync_scrollbar_from_offset()
 
     def _queue_resize_emit(self, cols: int, rows: int) -> None:
@@ -570,7 +574,15 @@ class TerminalWidget(QWidget):
             return
 
         old_history = list(old_screen.history.top)
-        old_rows = [old_screen.buffer.get(row, {}) for row in range(old_screen.lines)]
+        # Strip empty rows below cursor so the prompt stays at the bottom
+        # of the viewport after zoom instead of floating in the middle.
+        cursor_y = max(0, min(old_screen.cursor.y, old_screen.lines - 1))
+        last_used = cursor_y
+        for r in range(old_screen.lines - 1, cursor_y, -1):
+            if old_screen.buffer.get(r, {}):
+                last_used = r
+                break
+        old_rows = [old_screen.buffer.get(row, {}) for row in range(last_used + 1)]
         all_lines = [dict(line) for line in (old_history + old_rows)]
 
         # Keep only scrollback + viewport tail.
@@ -596,23 +608,16 @@ class TerminalWidget(QWidget):
         new_screen.icon_name = old_screen.icon_name
         new_screen.title = old_screen.title
 
-        def _clip_line(line: dict) -> dict:
-            if not line:
-                return {}
-            return {col: char for col, char in line.items() if col < new_cols}
-
         for line in history_lines:
-            new_screen.history.top.append(_clip_line(line))
+            new_screen.history.top.append(dict(line) if line else {})
 
         for row, line in enumerate(buffer_lines):
-            clipped = _clip_line(line)
-            if clipped:
-                new_screen.buffer[row] = clipped
+            if line:
+                new_screen.buffer[row] = dict(line)
 
-        old_abs_cursor = len(old_history) + max(0, min(old_screen.cursor.y, old_screen.lines - 1))
-        visible_total = len(all_lines)
-        old_total = len(old_history) + old_screen.lines
-        crop_start = max(0, old_total - visible_total)
+        old_abs_cursor = len(old_history) + cursor_y
+        trimmed_total = len(old_history) + len(old_rows)
+        crop_start = max(0, trimmed_total - len(all_lines))
         new_abs_cursor = max(0, old_abs_cursor - crop_start)
         history_len = len(history_lines)
         new_screen.cursor.y = max(0, min(new_rows - 1, new_abs_cursor - history_len))

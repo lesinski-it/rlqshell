@@ -257,6 +257,10 @@ def main() -> None:
     sc_broadcast = QShortcut(QKeySequence("Ctrl+Shift+B"), window)
     sc_broadcast.activated.connect(connections_page.toggle_broadcast)
 
+    # Split picker (Ctrl+\)
+    sc_split_picker = QShortcut(QKeySequence("Ctrl+\\"), window)
+    sc_split_picker.activated.connect(lambda: connections_page.show_split_picker())
+
     # "+" button in tab bar → navigate to Vault to pick a host
     connections_page._tab_bar.new_tab_requested.connect(go_to_vault_hosts)
 

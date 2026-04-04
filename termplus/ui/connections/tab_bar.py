@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import QEvent, QMimeData, QPoint, Qt, Signal
-from PySide6.QtGui import QCursor, QDrag, QPainter
+from PySide6.QtCore import QEvent, QMimeData, QPoint, QRect, QRectF, Qt, Signal
+from PySide6.QtGui import QColor, QCursor, QDrag, QPainter, QPen
 from PySide6.QtWidgets import (
     QApplication,
     QHBoxLayout,
@@ -17,6 +17,132 @@ from PySide6.QtWidgets import (
 from termplus.app.constants import Colors
 
 _TAB_MIME = "application/x-termplus-tab"
+
+_ICON_SIZE = 32
+_ICON_PAD = 8  # padding inside the icon button
+
+
+class _IconButton(QPushButton):
+    """Base for custom-painted tab bar icon buttons."""
+
+    def __init__(self, tooltip: str, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setFixedSize(_ICON_SIZE, _ICON_SIZE)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setToolTip(tooltip)
+        self._hovered = False
+        self.setStyleSheet("QPushButton { border: none; background: transparent; }")
+
+    def enterEvent(self, event) -> None:
+        self._hovered = True
+        self.update()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event) -> None:
+        self._hovered = False
+        self.update()
+        super().leaveEvent(event)
+
+    def _bg(self, painter: QPainter) -> None:
+        if self._hovered:
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor(Colors.BG_HOVER))
+            painter.drawRoundedRect(self.rect(), 5, 5)
+
+    def _pen_color(self) -> QColor:
+        return QColor(Colors.TEXT_PRIMARY) if self._hovered else QColor(Colors.TEXT_MUTED)
+
+
+class _NewTabButton(_IconButton):
+    """Plus icon — add new connection."""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__("New connection", parent)
+
+    def paintEvent(self, event) -> None:
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        self._bg(p)
+        pen = QPen(self._pen_color(), 1.0)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        p.setPen(pen)
+        cx, cy = self.width() / 2, self.height() / 2
+        s = 4
+        p.drawLine(int(cx - s), int(cy), int(cx + s), int(cy))
+        p.drawLine(int(cx), int(cy - s), int(cx), int(cy + s))
+        p.end()
+
+
+class _SplitButton(_IconButton):
+    """Split icon — two columns side by side."""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__("Split panel (Ctrl+\\)", parent)
+
+    def paintEvent(self, event) -> None:
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        self._bg(p)
+        pen = QPen(self._pen_color(), 1.4)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        p.setPen(pen)
+        pad = _ICON_PAD
+        r = QRect(pad, pad + 2, self.width() - pad * 2, self.height() - pad * 2 - 4)
+        p.drawRoundedRect(r, 3, 3)
+        # Vertical divider in center
+        cx = self.width() / 2
+        p.drawLine(int(cx), r.top() + 2, int(cx), r.bottom() - 2)
+        p.end()
+
+
+class _BroadcastButton(_IconButton):
+    """Broadcast icon — concentric arcs radiating outward."""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__("Broadcast mode (Ctrl+Shift+B)", parent)
+        self.setCheckable(True)
+        self._active = False
+
+    def set_active(self, active: bool) -> None:
+        self._active = active
+        self.update()
+
+    def paintEvent(self, event) -> None:
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        if self._active:
+            # Orange background when active
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(QColor(Colors.WARNING))
+            p.drawRoundedRect(self.rect(), 5, 5)
+            color = QColor("#ffffff")
+        else:
+            self._bg(p)
+            color = self._pen_color()
+
+        pen = QPen(color, 1.6)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        p.setPen(pen)
+        p.setBrush(Qt.BrushStyle.NoBrush)
+
+        cx, cy = self.width() / 2, self.height() / 2
+
+        # Center dot
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(color)
+        p.drawEllipse(QRectF(cx - 2, cy - 2, 4, 4))
+
+        # Two concentric arcs
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.setPen(pen)
+        for radius in (6, 10):
+            rect = QRectF(cx - radius, cy - radius, radius * 2, radius * 2)
+            p.drawArc(rect, 30 * 16, 120 * 16)   # top-right arc
+            p.drawArc(rect, 210 * 16, 120 * 16)  # bottom-left arc
+
+        p.end()
+
 
 _BTN_STYLE = (
     f"QPushButton {{ font-size: 12px; color: {Colors.TEXT_MUTED}; "
@@ -254,6 +380,8 @@ class ConnectionTabBar(QWidget):
     new_tab_requested = Signal()
     fullscreen_requested = Signal()
     tab_detach_requested = Signal(str)  # tab_id
+    split_requested = Signal()          # open split picker
+    broadcast_toggled = Signal(bool)    # broadcast mode toggled
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -297,18 +425,22 @@ class ConnectionTabBar(QWidget):
         self._drop_index: int = -1
 
         # "+" new tab button
-        new_btn = QPushButton("+")
-        new_btn.setFixedSize(36, 36)
-        new_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        new_btn.setToolTip("New connection")
-        new_btn.setStyleSheet(
-            f"QPushButton {{ font-size: 18px; font-weight: 700; color: {Colors.TEXT_MUTED}; "
-            f"background: transparent; border: none; border-radius: 6px; }}"
-            f"QPushButton:hover {{ color: {Colors.TEXT_PRIMARY}; "
-            f"background-color: {Colors.BG_HOVER}; }}"
-        )
+        new_btn = _NewTabButton()
         new_btn.clicked.connect(self.new_tab_requested.emit)
         outer_layout.addWidget(new_btn)
+
+        # Split button (Ctrl+\)
+        self._split_btn = _SplitButton()
+        self._split_btn.clicked.connect(self.split_requested.emit)
+        outer_layout.addWidget(self._split_btn)
+
+        # Broadcast toggle button (visible only when split view is active)
+        self._broadcast_btn = _BroadcastButton()
+        self._broadcast_btn.setVisible(False)
+        self._broadcast_btn.clicked.connect(
+            lambda checked: self.broadcast_toggled.emit(checked)
+        )
+        outer_layout.addWidget(self._broadcast_btn)
 
         self._tabs: dict[str, _TabButton] = {}
         self._active_tab: str | None = None
@@ -372,6 +504,22 @@ class ConnectionTabBar(QWidget):
     @property
     def tab_count(self) -> int:
         return len(self._tabs)
+
+    # -- Broadcast button --
+
+    def set_broadcast_button_visible(self, visible: bool) -> None:
+        """Show or hide the broadcast toggle button."""
+        self._broadcast_btn.setVisible(visible)
+
+    def set_broadcast_button_checked(self, checked: bool) -> None:
+        """Update the broadcast toggle button state (no signal emitted)."""
+        self._broadcast_btn.blockSignals(True)
+        self._broadcast_btn.setChecked(checked)
+        self._broadcast_btn.blockSignals(False)
+        self._broadcast_btn.set_active(checked)
+
+    def _update_broadcast_btn_style(self, active: bool) -> None:
+        self._broadcast_btn.set_active(active)
 
     # -- Drag & drop (reorder) --
 

@@ -7,8 +7,9 @@ import getpass
 import logging
 import uuid
 
-from PySide6.QtCore import QTimer, Qt, Signal
-from PySide6.QtWidgets import QInputDialog, QMessageBox, QStackedWidget, QVBoxLayout, QWidget
+from PySide6.QtCore import QRect, QTimer, Qt, Signal
+from PySide6.QtGui import QColor, QPainter, QPen
+from PySide6.QtWidgets import QMessageBox, QStackedWidget, QVBoxLayout, QWidget
 
 from termplus.app.config import ConfigManager
 from termplus.app.constants import Colors
@@ -29,13 +30,112 @@ from termplus.protocols.vnc.widget import VNCWidget
 from termplus.ui.connections.detached_window import DetachedTabWindow
 from termplus.ui.connections.session_status_bar import SessionStatusBar
 from termplus.ui.connections.tab_bar import ConnectionTabBar
-from termplus.ui.connections.split_container import SplitContainer
+from termplus.ui.connections.split_container import SplitContainer, SplitPanel
+from termplus.ui.connections.split_picker import SplitPickerDialog
 from termplus.ui.connections.terminal_widget import TerminalWidget
 from termplus.ui.dialogs.host_key_dialog import HostKeyDialog
 from termplus.ui.widgets.empty_state import EmptyState
 from termplus.ui.widgets.remote_control_panel import RemoteDesktopContainer
 
 logger = logging.getLogger(__name__)
+
+_TAB_MIME = "application/x-termplus-tab"
+
+
+class _DropZoneOverlay(QWidget):
+    """Transparent overlay that shows drop zone indicators when dragging a tab.
+
+    Divides the area into left/right (vertical split) and top/bottom (horizontal split)
+    quadrants. The hovered quadrant is highlighted with an accent color.
+    """
+
+    drop_requested = Signal(str)  # "left", "right", "top", "bottom"
+
+    def __init__(self, parent: QWidget) -> None:
+        super().__init__(parent)
+        self.setAcceptDrops(True)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, False)
+        self.setVisible(False)
+        self._zone: str | None = None  # hovered zone
+
+    def _zone_at(self, pos) -> str:
+        w, h = self.width(), self.height()
+        x, y = pos.x(), pos.y()
+        # Determine zone by which edge the cursor is closest to
+        margins = {
+            "left": x,
+            "right": w - x,
+            "top": y,
+            "bottom": h - y,
+        }
+        return min(margins, key=margins.get)
+
+    def dragEnterEvent(self, event) -> None:
+        if event.mimeData().hasFormat(_TAB_MIME):
+            event.acceptProposedAction()
+            self._zone = self._zone_at(event.position().toPoint())
+            self.update()
+
+    def dragMoveEvent(self, event) -> None:
+        if event.mimeData().hasFormat(_TAB_MIME):
+            event.acceptProposedAction()
+            new_zone = self._zone_at(event.position().toPoint())
+            if new_zone != self._zone:
+                self._zone = new_zone
+                self.update()
+
+    def dragLeaveEvent(self, event) -> None:
+        self._zone = None
+        self.setVisible(False)
+
+    def dropEvent(self, event) -> None:
+        if not event.mimeData().hasFormat(_TAB_MIME):
+            return
+        event.acceptProposedAction()
+        zone = self._zone_at(event.position().toPoint())
+        self._zone = None
+        self.setVisible(False)
+        self.drop_requested.emit(zone)
+
+    def paintEvent(self, event) -> None:
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        w, h = self.width(), self.height()
+        accent = QColor(Colors.ACCENT)
+        accent.setAlpha(40)
+        accent_strong = QColor(Colors.ACCENT)
+        accent_strong.setAlpha(100)
+        border = QColor(Colors.ACCENT)
+        border.setAlpha(180)
+
+        # Draw semi-transparent background
+        p.fillRect(self.rect(), QColor(0, 0, 0, 60))
+
+        # Draw the hovered zone highlight
+        zone = self._zone
+        zones = {
+            "left": QRect(0, 0, w // 2, h),
+            "right": QRect(w // 2, 0, w - w // 2, h),
+            "top": QRect(0, 0, w, h // 2),
+            "bottom": QRect(0, h // 2, w, h - h // 2),
+        }
+
+        if zone and zone in zones:
+            rect = zones[zone]
+            p.fillRect(rect, accent_strong)
+            pen = QPen(border, 2)
+            p.setPen(pen)
+            p.drawRect(rect.adjusted(1, 1, -1, -1))
+
+            # Draw label
+            labels = {"left": "\u258e Split Left", "right": "Split Right \u2590",
+                       "top": "\u2580 Split Top", "bottom": "Split Bottom \u2584"}
+            p.setPen(QColor(Colors.TEXT_PRIMARY))
+            p.setFont(p.font())
+            p.drawText(rect, Qt.AlignmentFlag.AlignCenter, labels.get(zone, ""))
+
+        p.end()
 
 
 class ConnectionsPage(QWidget):
@@ -73,6 +173,8 @@ class ConnectionsPage(QWidget):
         self._tab_bar.tab_selected.connect(self._on_tab_selected)
         self._tab_bar.tab_close_requested.connect(self._on_tab_close)
         self._tab_bar.tab_detach_requested.connect(self._on_tab_detach)
+        self._tab_bar.split_requested.connect(lambda: self.show_split_picker())
+        self._tab_bar.broadcast_toggled.connect(self._on_broadcast_btn_toggled)
         layout.addWidget(self._tab_bar)
 
         # Terminal stack
@@ -105,6 +207,16 @@ class ConnectionsPage(QWidget):
 
         self._pool.connection_count_changed.connect(self.connection_count_changed.emit)
         self._host_key_verify_signal.connect(lambda fn: fn())
+
+        # Split picker dialog (lazy-created on first use)
+        self._split_picker: SplitPickerDialog | None = None
+        self._pending_split_orientation: Qt.Orientation | None = None
+
+        # Drop zone overlay for tab drag-to-split
+        self._drop_overlay = _DropZoneOverlay(self._terminal_stack)
+        self._drop_overlay.drop_requested.connect(self._on_drop_zone_split)
+        self._terminal_stack.setAcceptDrops(True)
+        self._terminal_stack.installEventFilter(self)
 
     _SUPPORTED_PROTOCOLS = {"ssh", "vnc", "rdp"}
 
@@ -372,6 +484,13 @@ class ConnectionsPage(QWidget):
             widget, _ = session
             self._terminal_stack.setCurrentWidget(widget)
             widget.setFocus()
+            # Sync broadcast button with current tab's split state
+            if isinstance(widget, SplitContainer):
+                self._tab_bar.set_broadcast_button_visible(True)
+                self._tab_bar.set_broadcast_button_checked(widget.broadcast_mode)
+                self._tab_bar._update_broadcast_btn_style(widget.broadcast_mode)
+            else:
+                self._tab_bar.set_broadcast_button_visible(False)
         self._update_status_bar(tab_id)
 
     def _on_tab_close(self, tab_id: str) -> None:
@@ -425,6 +544,7 @@ class ConnectionsPage(QWidget):
             self._terminal_stack.setCurrentWidget(self._empty_state)
             self._status_bar.clear()
             self._status_bar.setVisible(False)
+            self._tab_bar.set_broadcast_button_visible(False)
         else:
             active = self._tab_bar.active_tab
             if active:
@@ -643,27 +763,103 @@ class ConnectionsPage(QWidget):
 
     def split_vertical(self) -> None:
         """Split the active terminal vertically (side by side)."""
-        self._do_split(Qt.Orientation.Horizontal)
+        self._show_split_picker(Qt.Orientation.Horizontal)
 
     def split_horizontal(self) -> None:
         """Split the active terminal horizontally (top / bottom)."""
-        self._do_split(Qt.Orientation.Vertical)
+        self._show_split_picker(Qt.Orientation.Vertical)
 
-    def _do_split(self, orientation: Qt.Orientation) -> None:
+    def show_split_picker(self, default_orientation: str = "vertical") -> None:
+        """Open the split picker dialog (called from Ctrl+\\ shortcut)."""
+        orient = (
+            Qt.Orientation.Horizontal if default_orientation == "vertical"
+            else Qt.Orientation.Vertical
+        )
+        self._show_split_picker(orient)
+
+    def _show_split_picker(self, orientation: Qt.Orientation) -> None:
+        """Show the fuzzy search split picker for host selection."""
         active = self._tab_bar.active_tab
         if not active or active not in self._sessions:
             return
-        wrapped_existing_terminal = False
-        froze_existing_terminals = False
+        _, conn = self._sessions[active]
+        if conn is None or conn.protocol != "ssh":
+            return
+        if self._tab_host_ids.get(active) is None:
+            return
+
+        # Store requested orientation for when the picker returns
+        self._pending_split_orientation = orientation
+
+        # Build host data for the picker
+        hosts = [h for h in self._host_manager.list_hosts(protocol="ssh") if h.id is not None]
+        if not hosts:
+            from termplus.ui.widgets.toast import ToastManager
+            ToastManager.instance().show_toast(
+                "No SSH hosts available in Vault.", toast_type="warning",
+            )
+            return
+
+        # If only one host, skip the picker
+        if len(hosts) == 1:
+            self._on_split_host_picked(hosts[0].id, "vertical" if orientation == Qt.Orientation.Horizontal else "horizontal")
+            return
+
+        groups = {g.id: g.name for g in self._host_manager.list_groups() if g.id is not None}
+
+        host_dicts = []
+        for h in hosts:
+            host_dicts.append({
+                "id": h.id,
+                "label": h.label,
+                "address": h.address,
+                "protocol": h.protocol,
+                "group_id": h.group_id,
+                "tags": [t.name for t in h.tags],
+                "color": h.color_label,
+                "last_connected": str(h.last_connected) if h.last_connected else None,
+                "connect_count": h.connect_count,
+            })
+
+        # Lazy-create picker on first use (window() is available now)
+        if self._split_picker is None:
+            self._split_picker = SplitPickerDialog(self.window())
+            self._split_picker.host_picked.connect(self._on_split_host_picked)
+
+        self._split_picker.setParent(self.window())
+        self._split_picker.set_hosts(host_dicts, groups)
+
+        # Set default orientation in picker
+        orient_str = "vertical" if orientation == Qt.Orientation.Horizontal else "horizontal"
+        self._split_picker._set_orientation(orient_str)
+
+        self._split_picker.show_picker()
+
+    def _on_split_host_picked(self, host_id: int, orientation_str: str) -> None:
+        """Handle host selection from the split picker."""
+        orientation = (
+            Qt.Orientation.Horizontal if orientation_str == "vertical"
+            else Qt.Orientation.Vertical
+        )
+
+        host = self._host_manager.get_host(host_id)
+        if host is None:
+            return
+
+        active = self._tab_bar.active_tab
+        if not active or active not in self._sessions:
+            return
+
         widget, conn = self._sessions[active]
-        # Only SSH terminals support split
         if conn is None or conn.protocol != "ssh":
             return
         base_host_id = self._tab_host_ids.get(active)
         if base_host_id is None:
             return
 
-        # Existing panel metadata (the currently open tab host).
+        wrapped_existing_terminal = False
+        froze_existing_terminals = False
+
         base_host = self._host_manager.get_host(base_host_id)
         tab_info = self._tab_bar.tab_info(active)
         base_label = (
@@ -672,17 +868,8 @@ class ConnectionsPage(QWidget):
             else (tab_info[0] if tab_info else "SSH Session")
         )
 
-        # New split panel may target a different SSH host.
-        host = self._pick_split_host(active)
-        if host is None:
-            return
-        host_id = host.id
-        if host_id is None:
-            return
-
         # Create new terminal + connection for the new panel
         new_terminal = TerminalWidget()
-        # Prevent transient splitter geometry changes from mutating pyte buffer.
         new_terminal._freeze_resize = True
         password, pkey = self._resolve_credentials(host)
         hk_callback = HostKeyVerifyCallback(self._verify_host_key)
@@ -697,9 +884,14 @@ class ConnectionsPage(QWidget):
             compression=host.ssh_compression,
             host_key_callback=hk_callback,
         )
-        # Wire signals for the new sub-connection
         new_conn.data_received.connect(new_terminal.feed)
         new_conn.connected.connect(new_terminal.clear_overlay)
+        new_conn.disconnected.connect(
+            lambda t=new_terminal: t.show_overlay("Disconnected", color=Colors.WARNING)
+        )
+        new_conn.error.connect(
+            lambda msg, t=new_terminal: t.show_overlay(f"Error: {msg}", color=Colors.DANGER)
+        )
         new_terminal.input_ready.connect(new_conn.send)
         new_terminal.size_changed.connect(new_conn.resize)
 
@@ -710,7 +902,6 @@ class ConnectionsPage(QWidget):
             self._freeze_all_terminals(container, True)
             froze_existing_terminals = True
         else:
-            # First split — wrap the existing terminal in a SplitContainer
             assert isinstance(widget, TerminalWidget)
             wrapped_existing_terminal = True
             widget._freeze_resize = True
@@ -722,27 +913,29 @@ class ConnectionsPage(QWidget):
             container.panel_removed.connect(
                 lambda panel_id, tid=active: self._on_split_panel_removed(tid, panel_id)
             )
+            container.single_panel_remaining.connect(
+                lambda panel, tid=active: self._unwrap_split_container(tid, panel)
+            )
+            container.broadcast_toggled.connect(self._on_broadcast_state_changed)
             self._terminal_stack.addWidget(container)
             self._terminal_stack.setCurrentWidget(container)
             self._sessions[active] = (container, conn)
-            # removeWidget() hides the old terminal; ensure it becomes visible in split panel.
             widget.show()
 
-        panel = container.split(orientation, new_terminal, new_conn, host_id, label)
+        # Show broadcast button now that we have a split container
+        self._tab_bar.set_broadcast_button_visible(True)
+
+        panel = container.split(orientation, new_terminal, new_conn, host.id, label)
         if panel is None:
-            # Panel limit reached
             if wrapped_existing_terminal or froze_existing_terminals:
                 self._freeze_all_terminals(container, False)
             new_terminal._freeze_resize = False
             new_conn.close()
             return
 
-        # Split operations can trigger transient resize events with temporary geometry.
-        # Refresh after splitter layout settles and only then unfreeze panel terminals.
         QTimer.singleShot(120, lambda c=container: self._refresh_split_layout(c))
         QTimer.singleShot(320, lambda c=container: self._refresh_split_layout(c))
 
-        # Track sub-connection
         sub_id = f"{active}:{panel.panel_id}"
         self._pool.add(sub_id, new_conn, host_id=host.id)
         subs = self._split_sub_conns.setdefault(active, [])
@@ -750,45 +943,6 @@ class ConnectionsPage(QWidget):
 
         new_terminal.show_overlay(f"Connecting to {host.address}:{host.ssh_port}...")
         asyncio.ensure_future(self._connect_split_async(new_conn, host))
-
-    def _pick_split_host(self, active_tab_id: str) -> Host | None:
-        """Ask user which SSH host should be used for a new split panel."""
-        hosts = [h for h in self._host_manager.list_hosts(protocol="ssh") if h.id is not None]
-        if not hosts:
-            from termplus.ui.widgets.toast import ToastManager
-            ToastManager.instance().show_toast(
-                "No SSH hosts available in Vault.",
-                toast_type="warning",
-            )
-            return None
-
-        if len(hosts) == 1:
-            return hosts[0]
-
-        current_host_id = self._tab_host_ids.get(active_tab_id)
-        items: list[str] = []
-        host_by_item: dict[str, Host] = {}
-        default_index = 0
-
-        for idx, host in enumerate(hosts):
-            host_label = host.label or host.address
-            item = f"{host_label} ({host.address}) [id:{host.id}]"
-            items.append(item)
-            host_by_item[item] = host
-            if host.id == current_host_id:
-                default_index = idx
-
-        selected, ok = QInputDialog.getItem(
-            self,
-            "Split Panel Host",
-            "Select SSH host for the new split panel:",
-            items,
-            default_index,
-            False,
-        )
-        if not ok:
-            return None
-        return host_by_item.get(selected)
 
     @staticmethod
     def _refresh_split_layout(container: SplitContainer) -> None:
@@ -842,6 +996,56 @@ class ConnectionsPage(QWidget):
             else:
                 self._split_sub_conns.pop(tab_id, None)
 
+    def _unwrap_split_container(self, tab_id: str, surviving_panel: object) -> None:
+        """Replace SplitContainer with the lone surviving terminal widget."""
+        if not isinstance(surviving_panel, SplitPanel):
+            return
+        session = self._sessions.get(tab_id)
+        if not session:
+            return
+        container, main_conn = session
+        if not isinstance(container, SplitContainer):
+            return
+
+        terminal = surviving_panel.terminal
+        conn = surviving_panel.connection
+
+        # Freeze terminal to avoid pyte buffer corruption during reparenting
+        terminal._freeze_resize = True
+
+        # Detach terminal from the SplitPanel before destroying the container
+        terminal.setParent(None)
+
+        # Remove container from stack and destroy it
+        self._terminal_stack.removeWidget(container)
+        container.deleteLater()
+
+        # Re-add the bare terminal to the stack
+        self._terminal_stack.addWidget(terminal)
+        self._terminal_stack.setCurrentWidget(terminal)
+        terminal.show()
+
+        # Update session — use the surviving panel's connection (or original main_conn)
+        effective_conn = conn if conn is not None else main_conn
+        self._sessions[tab_id] = (terminal, effective_conn)
+
+        # Hide broadcast button — no longer a split view
+        self._tab_bar.set_broadcast_button_visible(False)
+        self._tab_bar.set_broadcast_button_checked(False)
+        self._tab_bar._update_broadcast_btn_style(False)
+
+        # Unfreeze and refresh after layout settles
+        QTimer.singleShot(150, lambda t=terminal, c=effective_conn: self._refresh_unwrapped(t, c))
+
+    @staticmethod
+    def _refresh_unwrapped(terminal: TerminalWidget, conn: AbstractConnection | None) -> None:
+        """Unfreeze and refresh a terminal after unwrapping from SplitContainer."""
+        terminal._freeze_resize = False
+        terminal._recompute_size()
+        terminal.update()
+        if conn and hasattr(conn, 'resize'):
+            conn.resize(terminal._cols, terminal._rows)
+
     async def _connect_split_async(
         self, conn: SSHConnection, host: Host,
     ) -> None:
@@ -859,13 +1063,31 @@ class ConnectionsPage(QWidget):
             return
         widget, _ = self._sessions[active]
         if isinstance(widget, SplitContainer):
-            widget.set_broadcast(not widget.broadcast_mode)
+            new_state = not widget.broadcast_mode
+            widget.set_broadcast(new_state)
+            self._tab_bar.set_broadcast_button_checked(new_state)
+            self._tab_bar._update_broadcast_btn_style(new_state)
         else:
             from termplus.ui.widgets.toast import ToastManager
             ToastManager.instance().show_toast(
                 "Split the terminal first to use Broadcast Mode.",
                 toast_type="info",
             )
+
+    def _on_broadcast_btn_toggled(self, checked: bool) -> None:
+        """Handle broadcast button click from tab bar."""
+        active = self._tab_bar.active_tab
+        if not active or active not in self._sessions:
+            return
+        widget, _ = self._sessions[active]
+        if isinstance(widget, SplitContainer):
+            widget.set_broadcast(checked)
+            self._tab_bar._update_broadcast_btn_style(checked)
+
+    def _on_broadcast_state_changed(self, enabled: bool) -> None:
+        """Handle broadcast state change from SplitContainer (e.g. auto-off on panel close)."""
+        self._tab_bar.set_broadcast_button_checked(enabled)
+        self._tab_bar._update_broadcast_btn_style(enabled)
 
     @staticmethod
     def _freeze_all_terminals(widget: QWidget, freeze: bool) -> None:
@@ -934,6 +1156,41 @@ class ConnectionsPage(QWidget):
             active = self._tab_bar.active_tab
             if active:
                 self._update_status_bar(active)
+
+    # ------------------------------------------------------------------
+    # Drag-to-split (tab dropped onto terminal area)
+    # ------------------------------------------------------------------
+
+    def eventFilter(self, obj, event) -> bool:
+        """Intercept drag events on the terminal stack to show drop zone overlay."""
+        if obj is not self._terminal_stack:
+            return super().eventFilter(obj, event)
+
+        from PySide6.QtCore import QEvent
+        if event.type() == QEvent.Type.DragEnter:
+            if event.mimeData().hasFormat(_TAB_MIME):
+                # Only show overlay when there's an active SSH session
+                active = self._tab_bar.active_tab
+                if active and active in self._sessions:
+                    _, conn = self._sessions[active]
+                    if conn is not None and conn.protocol == "ssh":
+                        self._drop_overlay.setGeometry(self._terminal_stack.rect())
+                        self._drop_overlay.setVisible(True)
+                        self._drop_overlay.raise_()
+                        event.acceptProposedAction()
+                        return True
+        elif event.type() == QEvent.Type.Resize:
+            self._drop_overlay.setGeometry(self._terminal_stack.rect())
+
+        return super().eventFilter(obj, event)
+
+    def _on_drop_zone_split(self, zone: str) -> None:
+        """Handle a tab dropped onto a split zone in the terminal area."""
+        orientation = (
+            Qt.Orientation.Horizontal if zone in ("left", "right")
+            else Qt.Orientation.Vertical
+        )
+        self._show_split_picker(orientation)
 
     def close_all(self) -> None:
         """Close all connections (docked and detached)."""
