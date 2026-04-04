@@ -71,8 +71,11 @@ class SSHConnection(AbstractConnection):
         keep_alive: int = 60,
         agent_forwarding: bool = False,
         compression: bool = False,
+        x11_forwarding: bool = False,
         cols: int = 80,
         rows: int = 24,
+        timeout: int = 15,
+        term_type: str = "xterm-256color",
         host_key_callback: HostKeyVerifyCallback | None = None,
         open_shell: bool = True,
     ) -> None:
@@ -86,8 +89,11 @@ class SSHConnection(AbstractConnection):
         self._keep_alive = keep_alive
         self._agent_forwarding = agent_forwarding
         self._compression = compression
+        self._x11_forwarding = x11_forwarding
         self._cols = cols
         self._rows = rows
+        self._timeout = timeout
+        self._term_type = term_type
         self._host_key_callback = host_key_callback
         self._open_shell = open_shell
 
@@ -148,9 +154,9 @@ class SSHConnection(AbstractConnection):
             "hostname": self._hostname,
             "port": self._port,
             "username": self._username,
-            "timeout": 15,
+            "timeout": self._timeout,
             "compress": self._compression,
-            "allow_agent": True,
+            "allow_agent": self._agent_forwarding,
             "look_for_keys": True,
         }
         if self._password:
@@ -171,10 +177,15 @@ class SSHConnection(AbstractConnection):
 
         if self._open_shell:
             channel = client.invoke_shell(
-                term="xterm-256color",
+                term=self._term_type,
                 width=self._cols,
                 height=self._rows,
             )
+            if self._x11_forwarding:
+                try:
+                    channel.request_x11()
+                except paramiko.SSHException:
+                    logger.warning("X11 forwarding request rejected by server")
             channel.settimeout(0.1)
             self._channel = channel
 
@@ -236,6 +247,10 @@ class SSHConnection(AbstractConnection):
         """Close the SSH connection."""
         self._stop_event.set()
         self._connected = False
+
+        if self._read_thread is not None:
+            self._read_thread.join(timeout=2.0)
+            self._read_thread = None
 
         if self._channel:
             try:

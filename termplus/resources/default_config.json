@@ -27,7 +27,9 @@
         "default_port": 22,
         "keep_alive": 60,
         "compression": false,
-        "agent_forwarding": false
+        "agent_forwarding": false,
+        "connection_timeout": 15,
+        "terminal_type": "xterm-256color"
     },
     "sync": {
         "enabled": false,

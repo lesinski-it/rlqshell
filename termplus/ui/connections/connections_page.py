@@ -263,6 +263,7 @@ class ConnectionsPage(QWidget):
         password, pkey = self._resolve_credentials(host)
         hk_callback = HostKeyVerifyCallback(self._verify_host_key)
 
+        cfg = self._config
         conn = SSHConnection(
             hostname=host.address,
             port=host.ssh_port,
@@ -272,6 +273,9 @@ class ConnectionsPage(QWidget):
             keep_alive=host.ssh_keep_alive,
             agent_forwarding=host.ssh_agent_forwarding,
             compression=host.ssh_compression,
+            x11_forwarding=host.ssh_x11_forwarding,
+            timeout=int(cfg.get("ssh.connection_timeout", 15)) if cfg else 15,
+            term_type=str(cfg.get("ssh.terminal_type", "xterm-256color")) if cfg else "xterm-256color",
             host_key_callback=hk_callback,
         )
 
@@ -873,6 +877,7 @@ class ConnectionsPage(QWidget):
         new_terminal._freeze_resize = True
         password, pkey = self._resolve_credentials(host)
         hk_callback = HostKeyVerifyCallback(self._verify_host_key)
+        cfg = self._config
         new_conn = SSHConnection(
             hostname=host.address,
             port=host.ssh_port,
@@ -882,6 +887,9 @@ class ConnectionsPage(QWidget):
             keep_alive=host.ssh_keep_alive,
             agent_forwarding=host.ssh_agent_forwarding,
             compression=host.ssh_compression,
+            x11_forwarding=host.ssh_x11_forwarding,
+            timeout=int(cfg.get("ssh.connection_timeout", 15)) if cfg else 15,
+            term_type=str(cfg.get("ssh.terminal_type", "xterm-256color")) if cfg else "xterm-256color",
             host_key_callback=hk_callback,
         )
         new_conn.data_received.connect(new_terminal.feed)

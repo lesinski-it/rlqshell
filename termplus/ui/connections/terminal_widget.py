@@ -8,6 +8,7 @@ import pyte
 
 from PySide6.QtCore import QEvent, QRect, QRectF, Qt, QTimer, Signal, Slot
 from PySide6.QtGui import (
+    QAction,
     QColor,
     QClipboard,
     QFont,
@@ -18,7 +19,7 @@ from PySide6.QtGui import (
     QResizeEvent,
     QWheelEvent,
 )
-from PySide6.QtWidgets import QApplication, QScrollBar, QWidget
+from PySide6.QtWidgets import QApplication, QMenu, QScrollBar, QWidget
 
 logger = logging.getLogger(__name__)
 
@@ -108,6 +109,7 @@ class TerminalWidget(QWidget):
         font_family: str = "JetBrains Mono",
         font_size: int = 13,
         scrollback: int = 10000,
+        scroll_speed: int = 3,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -138,6 +140,7 @@ class TerminalWidget(QWidget):
         self._cols = cols
         self._rows = rows
         self._scrollback = scrollback
+        self._scroll_speed = max(1, scroll_speed)
 
         # Cursor blink
         self._cursor_visible = True
@@ -157,6 +160,16 @@ class TerminalWidget(QWidget):
         self._selecting = False
         self._sel_start: tuple[int, int] | None = None  # (col, row)
         self._sel_end: tuple[int, int] | None = None
+
+        # Click tracking for triple-click line selection
+        self._click_count = 0
+        self._click_timer = QTimer(self)
+        self._click_timer.setSingleShot(True)
+        self._click_timer.setInterval(400)
+        self._click_timer.timeout.connect(self._reset_click_count)
+
+        # Default font size for reset
+        self._default_font_size = font_size
 
         # Scroll offset into history (0 = bottom)
         self._scroll_offset = 0
@@ -318,6 +331,32 @@ class TerminalWidget(QWidget):
                 painter.drawRect(QRectF(cx, cy, cw, ch))
                 painter.setOpacity(1.0)
 
+            # Scroll-to-bottom indicator
+            if self._scroll_offset > 0:
+                pill_text = f"\u2193 {self._scroll_offset}"
+                pill_font = QFont(self._font)
+                pill_font.setPointSize(max(9, self._font.pointSize() - 2))
+                painter.setFont(pill_font)
+                pfm = QFontMetricsF(pill_font)
+                tw = pfm.horizontalAdvance(pill_text)
+                th = pfm.height()
+                px, py = 12, 8
+                pill_w = tw + px * 2
+                pill_h = th + py
+                content_w = self._content_width()
+                pill_x = content_w - pill_w - 8
+                pill_y = self.height() - pill_h - 8
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.setBrush(QColor(30, 30, 46, 220))
+                painter.drawRoundedRect(QRectF(pill_x, pill_y, pill_w, pill_h), pill_h / 2, pill_h / 2)
+                painter.setPen(QColor("#94e2d5"))
+                painter.drawText(
+                    QRectF(pill_x, pill_y, pill_w, pill_h),
+                    Qt.AlignmentFlag.AlignCenter,
+                    pill_text,
+                )
+                painter.setFont(self._font)
+
             # Draw overlay (status messages)
             if self._overlay_text:
                 overlay_font = QFont(self._font)
@@ -418,6 +457,27 @@ class TerminalWidget(QWidget):
     def mousePressEvent(self, event) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
             col, row = self._pos_to_cell(event.position())
+
+            # Shift+click extends selection from existing anchor
+            if event.modifiers() & Qt.KeyboardModifier.ShiftModifier and self._sel_start is not None:
+                self._sel_end = (col, row)
+                self._selecting = True
+                self.update()
+                return
+
+            # Track clicks for triple-click detection
+            self._click_count += 1
+            self._click_timer.start()
+
+            if self._click_count >= 3:
+                # Triple-click: select entire line
+                self._sel_start = (0, row)
+                self._sel_end = (self._cols - 1, row)
+                self._selecting = False
+                self._click_count = 0
+                self.update()
+                return
+
             self._sel_start = (col, row)
             self._sel_end = (col, row)
             self._selecting = True
@@ -435,6 +495,10 @@ class TerminalWidget(QWidget):
 
     def mouseDoubleClickEvent(self, event) -> None:
         """Double-click selects a word."""
+        # Count this as click #2 for triple-click detection
+        self._click_count = 2
+        self._click_timer.start()
+
         col, row = self._pos_to_cell(event.position())
         visible_lines = self._get_visible_lines()
         line = visible_lines[row] if row < len(visible_lines) else {}
@@ -469,14 +533,17 @@ class TerminalWidget(QWidget):
         max_offset = self._max_scroll_offset()
         if max_offset <= 0:
             return
+        speed = self._scroll_speed
+        old_offset = self._scroll_offset
         if delta > 0:
             # Scroll up into history
             self._scroll_offset = min(
-                self._scroll_offset + 3, max_offset
+                self._scroll_offset + speed, max_offset
             )
         else:
             # Scroll down
-            self._scroll_offset = max(self._scroll_offset - 3, 0)
+            self._scroll_offset = max(self._scroll_offset - speed, 0)
+        self._shift_selection(self._scroll_offset - old_offset)
         self._sync_scrollbar_from_offset()
         self.update()
 
@@ -560,7 +627,9 @@ class TerminalWidget(QWidget):
 
     def _on_scrollbar_changed(self, value: int) -> None:
         max_offset = self._max_scroll_offset()
+        old_offset = self._scroll_offset
         self._scroll_offset = max_offset - value
+        self._shift_selection(self._scroll_offset - old_offset)
         self.update()
 
     def _resize_screen_preserving_content(self, new_rows: int, new_cols: int) -> None:
@@ -714,6 +783,17 @@ class TerminalWidget(QWidget):
             return col <= ec
         return sr < row < er
 
+    def _shift_selection(self, delta: int) -> None:
+        """Shift selection coordinates to track content when scroll offset changes."""
+        if delta == 0:
+            return
+        if self._sel_start is not None:
+            sc, sr = self._sel_start
+            self._sel_start = (sc, sr + delta)
+        if self._sel_end is not None:
+            ec, er = self._sel_end
+            self._sel_end = (ec, er + delta)
+
     def _get_selected_text(self) -> str:
         if self._sel_start is None or self._sel_end is None:
             return ""
@@ -723,9 +803,19 @@ class TerminalWidget(QWidget):
         if (sr, sc) > (er, ec):
             sc, sr, ec, er = ec, er, sc, sr
 
+        # Build full line array (history + screen buffer) to support
+        # selections that extend beyond the current viewport.
+        history = list(self._screen.history.top)
+        screen_lines = getattr(self._screen, "lines", self._rows)
+        current = [self._screen.buffer.get(r, {}) for r in range(screen_lines)]
+        all_lines = history + current
+        # Viewport row 0 maps to this index in all_lines
+        base = len(all_lines) - self._rows - self._scroll_offset
+
         lines: list[str] = []
         for row in range(sr, er + 1):
-            line = self._screen.buffer.get(row, {})
+            idx = base + row
+            line = all_lines[idx] if 0 <= idx < len(all_lines) else {}
             start_col = sc if row == sr else 0
             end_col = ec if row == er else self._cols - 1
             chars = []
@@ -749,4 +839,137 @@ class TerminalWidget(QWidget):
             text = clipboard.text()
             if text:
                 self.input_ready.emit(text.encode("utf-8"))
+
+    def _cut_selection(self) -> None:
+        """Copy selected text and send backspace for each character (simulated cut)."""
+        text = self._get_selected_text()
+        if text:
+            clipboard = QApplication.clipboard()
+            if clipboard:
+                clipboard.setText(text)
+            # Send backspaces to remove selected text from command line
+            for _ in text.replace("\n", ""):
+                self.input_ready.emit(b"\x08")
+
+    def _select_all(self) -> None:
+        """Select all visible lines."""
+        self._sel_start = (0, 0)
+        self._sel_end = (self._cols - 1, self._rows - 1)
+        self.update()
+
+    def _clear_scrollback(self) -> None:
+        """Clear scrollback history."""
+        self._screen.history.top.clear()
+        if hasattr(self._screen.history, "bottom"):
+            self._screen.history.bottom.clear()
+        self._scroll_offset = 0
+        self._sync_scrollbar_from_offset()
+        self.update()
+
+    def _reset_terminal(self) -> None:
+        """Reset terminal state."""
+        self._screen.reset()
+        self._scroll_offset = 0
+        self._sel_start = None
+        self._sel_end = None
+        self._sync_scrollbar_from_offset()
+        self.update()
+
+    def _reset_font_size(self) -> None:
+        """Reset font to default size."""
+        if self._font.pointSize() != self._default_font_size:
+            self._pending_resize = None
+            self._resize_emit_timer.stop()
+            self._suppress_pty_resize_emit = True
+            try:
+                self.set_font(self._font.family(), self._default_font_size)
+            finally:
+                self._suppress_pty_resize_emit = False
+            self._scroll_offset = 0
+            self._sync_scrollbar_from_offset()
+
+    def _reset_click_count(self) -> None:
+        self._click_count = 0
+
+    # --- Context menu ---
+
+    def contextMenuEvent(self, event) -> None:
+        menu = QMenu(self)
+        menu.setStyleSheet("""
+            QMenu {
+                background: #1e1e2e;
+                color: #cdd6f4;
+                border: 1px solid #45475a;
+                border-radius: 6px;
+                padding: 4px 0;
+            }
+            QMenu::item {
+                padding: 6px 28px 6px 12px;
+            }
+            QMenu::item:selected {
+                background: #313244;
+            }
+            QMenu::item:disabled {
+                color: #585b70;
+            }
+            QMenu::separator {
+                height: 1px;
+                background: #45475a;
+                margin: 4px 8px;
+            }
+        """)
+
+        has_selection = bool(self._sel_start and self._sel_end and self._sel_start != self._sel_end)
+        clipboard = QApplication.clipboard()
+        has_clipboard = bool(clipboard and clipboard.text())
+
+        act_copy = menu.addAction("Kopiuj\tCtrl+Shift+C")
+        act_copy.setEnabled(has_selection)
+        act_copy.triggered.connect(self._copy_selection)
+
+        act_cut = menu.addAction("Wytnij\tCtrl+Shift+X")
+        act_cut.setEnabled(has_selection)
+        act_cut.triggered.connect(self._cut_selection)
+
+        act_paste = menu.addAction("Wklej\tCtrl+Shift+V")
+        act_paste.setEnabled(has_clipboard)
+        act_paste.triggered.connect(self._paste)
+
+        menu.addSeparator()
+
+        act_select_all = menu.addAction("Zaznacz wszystko")
+        act_select_all.triggered.connect(self._select_all)
+
+        act_clear_sel = menu.addAction("Wyczyść zaznaczenie")
+        act_clear_sel.setEnabled(has_selection)
+        act_clear_sel.triggered.connect(lambda: (
+            setattr(self, "_sel_start", None),
+            setattr(self, "_sel_end", None),
+            self.update(),
+        ))
+
+        menu.addSeparator()
+
+        act_clear_buf = menu.addAction("Wyczyść bufor")
+        act_clear_buf.triggered.connect(self._clear_scrollback)
+
+        act_reset = menu.addAction("Resetuj terminal")
+        act_reset.triggered.connect(self._reset_terminal)
+
+        menu.addSeparator()
+
+        # Font size submenu
+        font_menu = menu.addMenu("Rozmiar czcionki")
+        font_menu.setStyleSheet(menu.styleSheet())
+
+        act_zoom_in = font_menu.addAction("Powiększ\tCtrl+Shift++")
+        act_zoom_in.triggered.connect(lambda: self._adjust_font_size(1))
+
+        act_zoom_out = font_menu.addAction("Zmniejsz\tCtrl+Shift+-")
+        act_zoom_out.triggered.connect(lambda: self._adjust_font_size(-1))
+
+        act_zoom_reset = font_menu.addAction("Resetuj")
+        act_zoom_reset.triggered.connect(self._reset_font_size)
+
+        menu.exec(event.globalPos())
 
