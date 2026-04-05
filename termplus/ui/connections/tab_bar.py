@@ -331,7 +331,7 @@ class _TabButton(QWidget):
     def mousePressEvent(self, event) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
             self._drag_start = event.pos()
-            self.clicked.emit(self._tab_id)
+            self._did_drag = False
         elif event.button() == Qt.MouseButton.MiddleButton:
             self.close_requested.emit(self._tab_id)
 
@@ -341,6 +341,7 @@ class _TabButton(QWidget):
             and (event.pos() - self._drag_start).manhattanLength()
             >= QApplication.startDragDistance()
         ):
+            self._did_drag = True
             drag = QDrag(self)
             mime = QMimeData()
             mime.setData(_TAB_MIME, self._tab_id.encode("utf-8"))
@@ -368,7 +369,13 @@ class _TabButton(QWidget):
             self._drag_start = None
 
     def mouseReleaseEvent(self, event) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            # Emit clicked only on release (not drag) — prevents premature
+            # tab activation that would break drag-to-split detection.
+            if self._drag_start is not None and not self._did_drag:
+                self.clicked.emit(self._tab_id)
         self._drag_start = None
+        self._did_drag = False
         super().mouseReleaseEvent(event)
 
 
@@ -574,6 +581,9 @@ class ConnectionTabBar(QWidget):
         self._tabs_layout.removeWidget(tab)
         self._tabs_layout.insertWidget(self._drop_index, tab)
         self._drop_index = -1
+
+        # Activate the dropped tab so the user sees immediate feedback
+        self.select_tab(tab_id)
 
     # -- Internal callbacks --
 

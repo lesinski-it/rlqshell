@@ -11,8 +11,15 @@ from PySide6.QtWidgets import QApplication, QWidget
 from termplus.app.constants import APP_VERSION
 
 _SVG_PATH = Path(__file__).parent.parent / "resources" / "images" / "splash.svg"
-_SPLASH_W = 680
-_SPLASH_H = 480
+# SVG viewBox is 680x480 but the visible content rect starts at (40,20) with size 600x440.
+# We size the widget to the content area only, eliminating transparent margins that
+# render as a gray border on systems without a compositor.
+_SVG_VB_W = 680
+_SVG_VB_H = 480
+_CONTENT_X = 40
+_CONTENT_Y = 20
+_SPLASH_W = 600
+_SPLASH_H = 440
 _BAR_FULL_W = 240
 
 
@@ -31,10 +38,9 @@ class SplashScreen(QWidget):
 
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setFixedSize(_SPLASH_W, _SPLASH_H)
-        # Mask to the rounded content rect — fallback for systems where
-        # WA_TranslucentBackground is not fully supported (no compositor).
+        # Rounded mask as fallback for systems without compositor.
         path = QPainterPath()
-        path.addRoundedRect(QRectF(40, 20, 600, 440), 20, 20)
+        path.addRoundedRect(QRectF(0, 0, _SPLASH_W, _SPLASH_H), 20, 20)
         self.setMask(QRegion(path.toFillPolygon().toPolygon()))
         self._center_on_screen()
 
@@ -50,7 +56,9 @@ class SplashScreen(QWidget):
         renderer = QSvgRenderer(QByteArray(svg_bytes))
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        renderer.render(painter)
+        # Shift so the SVG content area (40,20) aligns to widget (0,0).
+        painter.translate(-_CONTENT_X, -_CONTENT_Y)
+        renderer.render(painter, QRectF(0, 0, _SVG_VB_W, _SVG_VB_H))
         painter.end()
 
     def update_progress(self, value: int, message: str = "") -> None:

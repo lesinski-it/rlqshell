@@ -268,8 +268,13 @@ class SplitContainer(QWidget):
         connection: AbstractConnection | None,
         host_id: int | None,
         host_label: str,
+        insert_before: bool = False,
     ) -> SplitPanel | None:
-        """Split the focused panel. Returns the new panel, or None if limit reached."""
+        """Split the focused panel. Returns the new panel, or None if limit reached.
+
+        If *insert_before* is True the new panel is placed before (left/top of)
+        the focused panel instead of after (right/bottom of) it.
+        """
         if len(self._panels) >= _MAX_PANELS:
             logger.warning("Split limit reached (%d panels)", _MAX_PANELS)
             return None
@@ -292,8 +297,9 @@ class SplitContainer(QWidget):
         idx = parent_splitter.indexOf(focused)
 
         if parent_splitter.orientation() == orientation:
-            # Same orientation — just insert next to the focused panel
-            parent_splitter.insertWidget(idx + 1, new_panel)
+            # Same orientation — insert before or after the focused panel
+            ins = idx if insert_before else idx + 1
+            parent_splitter.insertWidget(ins, new_panel)
             parent_splitter.setSizes([1] * parent_splitter.count())
         else:
             # Different orientation — create a child splitter
@@ -304,8 +310,12 @@ class SplitContainer(QWidget):
             )
             # Replace focused panel with the child splitter
             parent_splitter.insertWidget(idx, child_splitter)
-            child_splitter.addWidget(focused)
-            child_splitter.addWidget(new_panel)
+            if insert_before:
+                child_splitter.addWidget(new_panel)
+                child_splitter.addWidget(focused)
+            else:
+                child_splitter.addWidget(focused)
+                child_splitter.addWidget(new_panel)
             child_splitter.setSizes([1, 1])
             parent_splitter.setSizes([1] * parent_splitter.count())
 

@@ -49,7 +49,7 @@ class _DropZoneOverlay(QWidget):
     quadrants. The hovered quadrant is highlighted with an accent color.
     """
 
-    drop_requested = Signal(str)  # "left", "right", "top", "bottom"
+    drop_requested = Signal(str, str)  # zone ("left"/"right"/"top"/"bottom"), tab_id
 
     def __init__(self, parent: QWidget) -> None:
         super().__init__(parent)
@@ -93,9 +93,10 @@ class _DropZoneOverlay(QWidget):
             return
         event.acceptProposedAction()
         zone = self._zone_at(event.position().toPoint())
+        tab_id = bytes(event.mimeData().data(_TAB_MIME)).decode("utf-8")
         self._zone = None
         self.setVisible(False)
-        self.drop_requested.emit(zone)
+        self.drop_requested.emit(zone, tab_id)
 
     def paintEvent(self, event) -> None:
         p = QPainter(self)
@@ -211,6 +212,7 @@ class ConnectionsPage(QWidget):
         # Split picker dialog (lazy-created on first use)
         self._split_picker: SplitPickerDialog | None = None
         self._pending_split_orientation: Qt.Orientation | None = None
+        self._pending_split_insert_before: bool = False
 
         # Drop zone overlay for tab drag-to-split
         self._drop_overlay = _DropZoneOverlay(self._terminal_stack)
@@ -933,7 +935,9 @@ class ConnectionsPage(QWidget):
         # Show broadcast button now that we have a split container
         self._tab_bar.set_broadcast_button_visible(True)
 
-        panel = container.split(orientation, new_terminal, new_conn, host.id, label)
+        insert_before = self._pending_split_insert_before
+        self._pending_split_insert_before = False
+        panel = container.split(orientation, new_terminal, new_conn, host.id, label, insert_before=insert_before)
         if panel is None:
             if wrapped_existing_terminal or froze_existing_terminals:
                 self._freeze_all_terminals(container, False)
@@ -1177,7 +1181,6 @@ class ConnectionsPage(QWidget):
         from PySide6.QtCore import QEvent
         if event.type() == QEvent.Type.DragEnter:
             if event.mimeData().hasFormat(_TAB_MIME):
-                # Only show overlay when there's an active SSH session
                 active = self._tab_bar.active_tab
                 if active and active in self._sessions:
                     _, conn = self._sessions[active]
@@ -1192,8 +1195,23 @@ class ConnectionsPage(QWidget):
 
         return super().eventFilter(obj, event)
 
-    def _on_drop_zone_split(self, zone: str) -> None:
+    def _on_drop_zone_split(self, zone: str, dropped_tab_id: str) -> None:
         """Handle a tab dropped onto a split zone in the terminal area."""
+        orientation_str = "vertical" if zone in ("left", "right") else "horizontal"
+        insert_before = zone in ("left", "top")
+
+        # Use the dropped tab's host to split directly (no picker needed)
+        host_id = self._tab_host_ids.get(dropped_tab_id)
+        if host_id is not None:
+            self._pending_split_insert_before = insert_before
+            self._on_split_host_picked(host_id, orientation_str)
+            # Close the dropped tab — its connection now lives in the split panel
+            if dropped_tab_id != self._tab_bar.active_tab:
+                self._on_tab_close(dropped_tab_id)
+            return
+
+        # Fallback to picker if host unknown
+        self._pending_split_insert_before = insert_before
         orientation = (
             Qt.Orientation.Horizontal if zone in ("left", "right")
             else Qt.Orientation.Vertical
