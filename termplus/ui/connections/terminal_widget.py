@@ -432,6 +432,14 @@ class TerminalWidget(QWidget):
             self._paste()
             return
 
+        # Ctrl+Shift+A -> select all
+        if (
+            modifiers == (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier)
+            and key == Qt.Key.Key_A
+        ):
+            self._select_all()
+            return
+
         # Mapped keys (application cursor mode overrides when DECCKM is active)
         if _DECCKM in self._screen.mode:
             seq = _APP_CURSOR_MAP.get(key) or _KEY_MAP.get(key)
@@ -832,12 +840,25 @@ class TerminalWidget(QWidget):
             clipboard = QApplication.clipboard()
             if clipboard:
                 clipboard.setText(text)
+            self._sel_start = None
+            self._sel_end = None
+            self.update()
 
     def _paste(self) -> None:
         clipboard = QApplication.clipboard()
-        if clipboard:
-            text = clipboard.text()
-            if text:
+        if not clipboard:
+            return
+        text = clipboard.text()
+        if not text:
+            return
+        # Single line: paste immediately; multi-line: show confirmation dialog
+        if "\n" not in text and "\r" not in text:
+            self.input_ready.emit(text.encode("utf-8"))
+        else:
+            from termplus.ui.dialogs.paste_confirm_dialog import PasteConfirmDialog
+
+            dlg = PasteConfirmDialog(text, parent=self)
+            if dlg.exec() == PasteConfirmDialog.Accepted:
                 self.input_ready.emit(text.encode("utf-8"))
 
     def _cut_selection(self) -> None:
@@ -923,53 +944,62 @@ class TerminalWidget(QWidget):
         clipboard = QApplication.clipboard()
         has_clipboard = bool(clipboard and clipboard.text())
 
-        act_copy = menu.addAction("Kopiuj\tCtrl+Shift+C")
+        act_copy = menu.addAction("Copy\tCtrl+Shift+C")
         act_copy.setEnabled(has_selection)
-        act_copy.triggered.connect(self._copy_selection)
 
-        act_cut = menu.addAction("Wytnij\tCtrl+Shift+X")
+        act_cut = menu.addAction("Cut\tCtrl+Shift+X")
         act_cut.setEnabled(has_selection)
-        act_cut.triggered.connect(self._cut_selection)
 
-        act_paste = menu.addAction("Wklej\tCtrl+Shift+V")
+        act_paste = menu.addAction("Paste\tCtrl+Shift+V")
         act_paste.setEnabled(has_clipboard)
-        act_paste.triggered.connect(self._paste)
 
         menu.addSeparator()
 
-        act_select_all = menu.addAction("Zaznacz wszystko")
-        act_select_all.triggered.connect(self._select_all)
+        act_select_all = menu.addAction("Select All\tCtrl+Shift+A")
 
-        act_clear_sel = menu.addAction("Wyczyść zaznaczenie")
+        act_clear_sel = menu.addAction("Clear Selection")
         act_clear_sel.setEnabled(has_selection)
-        act_clear_sel.triggered.connect(lambda: (
-            setattr(self, "_sel_start", None),
-            setattr(self, "_sel_end", None),
-            self.update(),
-        ))
 
         menu.addSeparator()
 
-        act_clear_buf = menu.addAction("Wyczyść bufor")
-        act_clear_buf.triggered.connect(self._clear_scrollback)
+        act_clear_buf = menu.addAction("Clear Scrollback")
 
-        act_reset = menu.addAction("Resetuj terminal")
-        act_reset.triggered.connect(self._reset_terminal)
+        act_reset = menu.addAction("Reset Terminal")
 
         menu.addSeparator()
 
         # Font size submenu
-        font_menu = menu.addMenu("Rozmiar czcionki")
+        font_menu = menu.addMenu("Font Size")
         font_menu.setStyleSheet(menu.styleSheet())
 
-        act_zoom_in = font_menu.addAction("Powiększ\tCtrl+Shift++")
-        act_zoom_in.triggered.connect(lambda: self._adjust_font_size(1))
+        act_zoom_in = font_menu.addAction("Zoom In\tCtrl+Shift++")
+        act_zoom_out = font_menu.addAction("Zoom Out\tCtrl+Shift+-")
+        act_zoom_reset = font_menu.addAction("Reset")
 
-        act_zoom_out = font_menu.addAction("Zmniejsz\tCtrl+Shift+-")
-        act_zoom_out.triggered.connect(lambda: self._adjust_font_size(-1))
+        chosen = menu.exec(event.globalPos())
+        if chosen is None:
+            return
 
-        act_zoom_reset = font_menu.addAction("Resetuj")
-        act_zoom_reset.triggered.connect(self._reset_font_size)
-
-        menu.exec(event.globalPos())
+        if chosen is act_copy:
+            self._copy_selection()
+        elif chosen is act_cut:
+            self._cut_selection()
+        elif chosen is act_paste:
+            self._paste()
+        elif chosen is act_select_all:
+            self._select_all()
+        elif chosen is act_clear_sel:
+            self._sel_start = None
+            self._sel_end = None
+            self.update()
+        elif chosen is act_clear_buf:
+            self._clear_scrollback()
+        elif chosen is act_reset:
+            self._reset_terminal()
+        elif chosen is act_zoom_in:
+            self._adjust_font_size(1)
+        elif chosen is act_zoom_out:
+            self._adjust_font_size(-1)
+        elif chosen is act_zoom_reset:
+            self._reset_font_size()
 
