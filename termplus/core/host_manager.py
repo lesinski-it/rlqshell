@@ -70,6 +70,21 @@ class HostManager:
         logger.debug("Created host %d: %s", host_id, host.label)
         return host_id
 
+    def reorder_hosts(self, ordered_ids: list[int]) -> None:
+        """Update sort_order for hosts based on their position in the list."""
+        for idx, host_id in enumerate(ordered_ids):
+            self._db.execute(
+                "UPDATE hosts SET sort_order = ? WHERE id = ?",
+                (idx, host_id),
+            )
+
+    def move_host_to_group(self, host_id: int, group_id: int | None) -> None:
+        """Move a host to a different group."""
+        self._db.execute(
+            "UPDATE hosts SET group_id = ? WHERE id = ?",
+            (group_id, host_id),
+        )
+
     def update_host(self, host: Host) -> None:
         """Update an existing host."""
         self._db.execute(

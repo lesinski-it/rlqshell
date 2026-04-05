@@ -20,6 +20,145 @@ from termplus.app.constants import Colors
 from termplus.core.models.snippet import Snippet
 from termplus.core.snippet_manager import SnippetManager
 
+SNIPPET_COLORS = [
+    ("#6c757d", "Gray"),
+    ("#7c3aed", "Purple"),
+    ("#3b82f6", "Blue"),
+    ("#06b6d4", "Cyan"),
+    ("#22c55e", "Green"),
+    ("#f59e0b", "Yellow"),
+    ("#f97316", "Orange"),
+    ("#e94560", "Red"),
+    ("#ec4899", "Pink"),
+]
+
+
+class _ColorButton(QPushButton):
+    """Small circular color swatch button."""
+
+    def __init__(self, color: str, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.color = color
+        self.setFixedSize(24, 24)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setCheckable(True)
+        self._update_style()
+
+    def _update_style(self) -> None:
+        border = f"2px solid {Colors.TEXT_PRIMARY}" if self.isChecked() else "2px solid transparent"
+        self.setStyleSheet(
+            f"QPushButton {{ background-color: {self.color}; border: {border}; "
+            f"border-radius: 12px; }}"
+        )
+
+    def setChecked(self, checked: bool) -> None:
+        super().setChecked(checked)
+        self._update_style()
+
+
+class _TagEditor(QWidget):
+    """Inline tag editor — shows existing tags as pills + input for new ones."""
+
+    def __init__(self, existing_tags: list[str], parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._tags: list[str] = []
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
+
+        # Tag pills container
+        self._pills_row = QHBoxLayout()
+        self._pills_row.setContentsMargins(0, 0, 0, 0)
+        self._pills_row.setSpacing(4)
+        self._pills_row.addStretch()
+        self._pills_widget = QWidget()
+        self._pills_widget.setLayout(self._pills_row)
+        self._pills_widget.setStyleSheet("background: transparent;")
+        layout.addWidget(self._pills_widget)
+
+        # Input row
+        input_row = QHBoxLayout()
+        input_row.setContentsMargins(0, 0, 0, 0)
+        input_row.setSpacing(6)
+
+        self._input = QLineEdit()
+        self._input.setPlaceholderText("Add tag and press Enter")
+        self._input.setStyleSheet(
+            f"background-color: {Colors.BG_SURFACE}; color: {Colors.TEXT_PRIMARY}; "
+            f"border: 1px solid {Colors.BORDER}; border-radius: 6px; "
+            f"padding: 6px 10px; font-size: 12px;"
+        )
+        self._input.returnPressed.connect(self._add_current)
+        input_row.addWidget(self._input, 1)
+
+        # Suggestions combo (existing tags)
+        if existing_tags:
+            self._suggest = QComboBox()
+            self._suggest.addItem("existing tags…")
+            for t in existing_tags:
+                self._suggest.addItem(t)
+            self._suggest.setFixedWidth(130)
+            self._suggest.setStyleSheet(
+                f"font-size: 12px; background-color: {Colors.BG_SURFACE}; "
+                f"color: {Colors.TEXT_SECONDARY}; border: 1px solid {Colors.BORDER}; "
+                f"border-radius: 6px; padding: 4px 8px;"
+            )
+            self._suggest.currentIndexChanged.connect(self._on_suggest_selected)
+            input_row.addWidget(self._suggest)
+
+        layout.addLayout(input_row)
+
+    def _add_current(self) -> None:
+        tag = self._input.text().strip().lower()
+        if tag and tag not in self._tags:
+            self._tags.append(tag)
+            self._rebuild_pills()
+        self._input.clear()
+
+    def _on_suggest_selected(self, idx: int) -> None:
+        if idx <= 0:
+            return
+        tag = self._suggest.itemText(idx)
+        if tag not in self._tags:
+            self._tags.append(tag)
+            self._rebuild_pills()
+        self._suggest.setCurrentIndex(0)
+
+    def _rebuild_pills(self) -> None:
+        # Clear existing pills (keep stretch)
+        while self._pills_row.count() > 1:
+            item = self._pills_row.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+        for tag in self._tags:
+            pill = QPushButton(f"  {tag}  \u00d7")
+            pill.setFixedHeight(22)
+            pill.setCursor(Qt.CursorShape.PointingHandCursor)
+            pill.setStyleSheet(
+                f"QPushButton {{ background-color: {Colors.BG_SURFACE}; "
+                f"color: {Colors.TEXT_PRIMARY}; border: 1px solid {Colors.BORDER}; "
+                f"border-radius: 11px; font-size: 11px; padding: 0 6px; }}"
+                f"QPushButton:hover {{ background-color: {Colors.DANGER}; color: #fff; }}"
+            )
+            _tag = tag
+            pill.clicked.connect(lambda checked=False, t=_tag: self._remove_tag(t))
+            self._pills_row.insertWidget(self._pills_row.count() - 1, pill)
+
+    def _remove_tag(self, tag: str) -> None:
+        if tag in self._tags:
+            self._tags.remove(tag)
+            self._rebuild_pills()
+
+    def set_tags(self, tags: list[str]) -> None:
+        self._tags = list(tags)
+        self._rebuild_pills()
+
+    @property
+    def tags(self) -> list[str]:
+        return list(self._tags)
+
 
 class SnippetEditor(QDialog):
     """Dialog for creating or editing a snippet."""
@@ -35,7 +174,7 @@ class SnippetEditor(QDialog):
         self._snippet_id = snippet_id
 
         self.setWindowTitle("Edit Snippet" if snippet_id else "New Snippet")
-        self.setFixedSize(500, 440)
+        self.setFixedSize(520, 600)
 
         self._build_ui()
         self._apply_style()
@@ -46,7 +185,7 @@ class SnippetEditor(QDialog):
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
         layout.setContentsMargins(24, 24, 24, 24)
-        layout.setSpacing(12)
+        layout.setSpacing(10)
 
         # Name
         layout.addWidget(self._make_label("Name"))
@@ -57,16 +196,16 @@ class SnippetEditor(QDialog):
         # Package
         layout.addWidget(self._make_label("Package"))
         self._package_combo = QComboBox()
-        self._package_combo.addItem("— None —", None)
+        self._package_combo.addItem("\u2014 None \u2014", None)
         for pkg in self._manager.list_packages():
             self._package_combo.addItem(pkg.name, pkg.id)
         layout.addWidget(self._package_combo)
 
         # Script
-        layout.addWidget(self._make_label("Script"))
+        layout.addWidget(self._make_label("Script (use {{var}} for variables)"))
         self._script_edit = QTextEdit()
-        self._script_edit.setPlaceholderText("sudo systemctl restart nginx")
-        self._script_edit.setMinimumHeight(100)
+        self._script_edit.setPlaceholderText("apt update && apt upgrade -y")
+        self._script_edit.setMinimumHeight(80)
         self._script_edit.setStyleSheet(
             f"font-family: 'JetBrains Mono', monospace; font-size: 13px; "
             f"background-color: {Colors.BG_SURFACE}; color: {Colors.TEXT_PRIMARY}; "
@@ -79,6 +218,26 @@ class SnippetEditor(QDialog):
         self._desc_edit = QLineEdit()
         self._desc_edit.setPlaceholderText("Brief description of what this does")
         layout.addWidget(self._desc_edit)
+
+        # Color
+        layout.addWidget(self._make_label("Color"))
+        color_row = QHBoxLayout()
+        color_row.setContentsMargins(0, 0, 0, 0)
+        color_row.setSpacing(6)
+        self._color_buttons: list[_ColorButton] = []
+        for hex_color, _name in SNIPPET_COLORS:
+            btn = _ColorButton(hex_color)
+            btn.clicked.connect(lambda checked, b=btn: self._on_color_clicked(b))
+            self._color_buttons.append(btn)
+            color_row.addWidget(btn)
+        color_row.addStretch()
+        layout.addLayout(color_row)
+
+        # Tags
+        layout.addWidget(self._make_label("Tags"))
+        existing_tags = self._manager.list_all_tags()
+        self._tag_editor = _TagEditor(existing_tags)
+        layout.addWidget(self._tag_editor)
 
         # Run as sudo
         self._sudo_check = QCheckBox("Run as sudo")
@@ -114,6 +273,16 @@ class SnippetEditor(QDialog):
 
         layout.addLayout(btn_row)
 
+    def _on_color_clicked(self, clicked_btn: _ColorButton) -> None:
+        for btn in self._color_buttons:
+            btn.setChecked(btn is clicked_btn)
+
+    def _get_selected_color(self) -> str | None:
+        for btn in self._color_buttons:
+            if btn.isChecked():
+                return btn.color
+        return None
+
     def _load_snippet(self, snippet_id: int) -> None:
         snippet = self._manager.get_snippet(snippet_id)
         if not snippet:
@@ -126,6 +295,13 @@ class SnippetEditor(QDialog):
             idx = self._package_combo.findData(snippet.package_id)
             if idx >= 0:
                 self._package_combo.setCurrentIndex(idx)
+        if snippet.color_label:
+            for btn in self._color_buttons:
+                if btn.color == snippet.color_label:
+                    btn.setChecked(True)
+                    break
+        if snippet.tags:
+            self._tag_editor.set_tags(snippet.tags)
 
     def _save(self) -> None:
         name = self._name_edit.text().strip()
@@ -145,6 +321,8 @@ class SnippetEditor(QDialog):
             description=self._desc_edit.text().strip() or None,
             package_id=self._package_combo.currentData(),
             run_as_sudo=self._sudo_check.isChecked(),
+            color_label=self._get_selected_color(),
+            tags=self._tag_editor.tags,
         )
 
         if self._snippet_id:

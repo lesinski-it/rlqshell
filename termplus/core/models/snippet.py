@@ -28,5 +28,7 @@ class Snippet:
     script: str = ""
     description: str | None = None
     run_as_sudo: bool = False
+    color_label: str | None = None
     sort_order: int = 0
     created_at: datetime | None = None
+    tags: list[str] | None = None

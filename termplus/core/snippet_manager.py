@@ -57,29 +57,35 @@ class SnippetManager:
         """Insert a new snippet and return its id."""
         cursor = self._db.execute(
             """INSERT INTO snippets
-                (vault_id, package_id, name, script, description, run_as_sudo, sort_order)
-            VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (vault_id, package_id, name, script, description, run_as_sudo,
+                 color_label, sort_order)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 snippet.vault_id, snippet.package_id, snippet.name,
                 snippet.script, snippet.description, snippet.run_as_sudo,
-                snippet.sort_order,
+                snippet.color_label, snippet.sort_order,
             ),
         )
-        return cursor.lastrowid  # type: ignore[return-value]
+        snippet_id = cursor.lastrowid
+        if snippet.tags:
+            self._sync_tags(snippet_id, snippet.tags)
+        return snippet_id  # type: ignore[return-value]
 
     def update_snippet(self, snippet: Snippet) -> None:
         """Update an existing snippet."""
         self._db.execute(
             """UPDATE snippets SET
                 vault_id=?, package_id=?, name=?, script=?, description=?,
-                run_as_sudo=?, sort_order=?
+                run_as_sudo=?, color_label=?, sort_order=?
             WHERE id=?""",
             (
                 snippet.vault_id, snippet.package_id, snippet.name,
                 snippet.script, snippet.description, snippet.run_as_sudo,
-                snippet.sort_order, snippet.id,
+                snippet.color_label, snippet.sort_order, snippet.id,
             ),
         )
+        if snippet.id is not None and snippet.tags is not None:
+            self._sync_tags(snippet.id, snippet.tags)
 
     def delete_snippet(self, snippet_id: int) -> None:
         """Delete a snippet by id."""
@@ -115,9 +121,8 @@ class SnippetManager:
         rows = self._db.fetchall(sql, tuple(params))
         return [self._row_to_snippet(r) for r in rows]
 
-    @staticmethod
-    def _row_to_snippet(row: dict | object) -> Snippet:
-        return Snippet(
+    def _row_to_snippet(self, row: dict | object, *, load_tags: bool = True) -> Snippet:
+        snippet = Snippet(
             id=row["id"],
             vault_id=row["vault_id"],
             package_id=row["package_id"],
@@ -125,6 +130,74 @@ class SnippetManager:
             script=row["script"],
             description=row["description"],
             run_as_sudo=bool(row["run_as_sudo"]),
+            color_label=row["color_label"] if "color_label" in row.keys() else None,
             sort_order=row["sort_order"],
             created_at=row["created_at"],
         )
+        if load_tags and snippet.id is not None:
+            snippet.tags = self._get_snippet_tags(snippet.id)
+        return snippet
+
+    # --- Tags ---
+
+    def _get_snippet_tags(self, snippet_id: int) -> list[str]:
+        rows = self._db.fetchall(
+            "SELECT t.name FROM tags t "
+            "JOIN snippet_tags st ON st.tag_id = t.id "
+            "WHERE st.snippet_id = ? ORDER BY t.name",
+            (snippet_id,),
+        )
+        return [r["name"] for r in rows]
+
+    def _sync_tags(self, snippet_id: int, tag_names: list[str]) -> None:
+        self._db.execute("DELETE FROM snippet_tags WHERE snippet_id = ?", (snippet_id,))
+        for name in tag_names:
+            name = name.strip()
+            if not name:
+                continue
+            row = self._db.fetchone("SELECT id FROM tags WHERE name = ?", (name,))
+            if row:
+                tag_id = row["id"]
+            else:
+                cursor = self._db.execute(
+                    "INSERT INTO tags (name) VALUES (?)", (name,),
+                )
+                tag_id = cursor.lastrowid
+            self._db.execute(
+                "INSERT OR IGNORE INTO snippet_tags (snippet_id, tag_id) VALUES (?, ?)",
+                (snippet_id, tag_id),
+            )
+
+    def duplicate_snippet(self, snippet_id: int) -> int | None:
+        """Duplicate a snippet and return the new id, or None if not found."""
+        original = self.get_snippet(snippet_id)
+        if original is None:
+            return None
+        copy = Snippet(
+            vault_id=original.vault_id,
+            package_id=original.package_id,
+            name=f"{original.name} (copy)",
+            script=original.script,
+            description=original.description,
+            run_as_sudo=original.run_as_sudo,
+            color_label=original.color_label,
+            sort_order=original.sort_order + 1,
+            tags=list(original.tags) if original.tags else None,
+        )
+        return self.create_snippet(copy)
+
+    def reorder_snippets(self, ordered_ids: list[int]) -> None:
+        """Update sort_order for snippets based on their position in the list."""
+        for idx, snippet_id in enumerate(ordered_ids):
+            self._db.execute(
+                "UPDATE snippets SET sort_order = ? WHERE id = ?",
+                (idx, snippet_id),
+            )
+
+    def list_all_tags(self) -> list[str]:
+        """Return all tag names used by snippets."""
+        rows = self._db.fetchall(
+            "SELECT DISTINCT t.name FROM tags t "
+            "JOIN snippet_tags st ON st.tag_id = t.id ORDER BY t.name",
+        )
+        return [r["name"] for r in rows]

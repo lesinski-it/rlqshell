@@ -145,8 +145,15 @@ CREATE TABLE IF NOT EXISTS snippets (
     script TEXT NOT NULL,
     description TEXT,
     run_as_sudo BOOLEAN DEFAULT 0,
+    color_label TEXT,
     sort_order INTEGER DEFAULT 0,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS snippet_tags (
+    snippet_id INTEGER REFERENCES snippets(id) ON DELETE CASCADE,
+    tag_id INTEGER REFERENCES tags(id) ON DELETE CASCADE,
+    PRIMARY KEY (snippet_id, tag_id)
 );
 
 -- === PORT FORWARDING ===
@@ -250,7 +257,18 @@ class Database:
             )
             conn.commit()
 
+        self._run_migrations(conn)
+
         logger.info("Database initialized: %s", self._db_path)
+
+    @staticmethod
+    def _run_migrations(conn: sqlite3.Connection) -> None:
+        """Apply schema migrations for existing databases."""
+        # Add color_label to snippets (added in v0.2)
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(snippets)").fetchall()}
+        if "color_label" not in cols:
+            conn.execute("ALTER TABLE snippets ADD COLUMN color_label TEXT")
+            conn.commit()
 
     def _get_connection(self) -> sqlite3.Connection:
         if self._connection is None:

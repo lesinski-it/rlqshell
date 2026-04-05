@@ -53,8 +53,9 @@ class TagPill(QWidget):
             close_btn.clicked.connect(lambda: self.remove_clicked.emit(self._tag_id))
             layout.addWidget(close_btn)
 
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setStyleSheet(
-            f"TagPill {{ background-color: {color}; border-radius: 10px; }}"
+            f"background-color: {color}; border-radius: 10px;"
         )
         self.setFixedHeight(22)
 

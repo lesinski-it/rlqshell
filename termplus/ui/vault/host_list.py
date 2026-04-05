@@ -1,10 +1,11 @@
-"""Host list view with groups, search, filtering, and context menu."""
+"""Host list view with groups, search, filtering, drag-and-drop, and context menu."""
 
 from __future__ import annotations
 
 import logging
 
-from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtCore import QMimeData, QPoint, Qt, QTimer, Signal
+from PySide6.QtGui import QColor, QDrag, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -36,6 +37,8 @@ PROTOCOL_COLORS: dict[str, str] = {
 }
 
 ALL_PROTOCOLS = ["ssh", "rdp", "vnc", "telnet", "serial"]
+
+_DRAG_MIME = "application/x-termplus-host-id"
 
 
 class _FilterChip(QPushButton):
@@ -232,6 +235,15 @@ class HostListItem(QWidget):
         layout.setContentsMargins(12, 6, 12, 6)
         layout.setSpacing(10)
 
+        # Drag handle
+        handle = QLabel("\u2261")
+        handle.setFixedWidth(16)
+        handle.setStyleSheet(
+            f"font-size: 18px; color: {Colors.TEXT_MUTED}; background: transparent;"
+        )
+        handle.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(handle)
+
         # Protocol badge with color
         proto_color = PROTOCOL_COLORS.get(host.protocol, Colors.TEXT_MUTED)
         proto_label = QLabel(host.protocol.upper())
@@ -256,7 +268,7 @@ class HostListItem(QWidget):
         )
         info_layout.addWidget(name_label)
 
-        addr_label = QLabel(host.address or "—")
+        addr_label = QLabel(host.address or "\u2014")
         addr_label.setStyleSheet(
             f"font-size: 11px; color: {Colors.TEXT_MUTED}; background: transparent;"
         )
@@ -274,15 +286,60 @@ class HostListItem(QWidget):
         self._badge = StatusBadge(status)
         layout.addWidget(self._badge)
 
+        # Drag state
+        self._drag_start: QPoint | None = None
+
+    @property
+    def host_id(self) -> int:
+        return self._host_id
+
     def mousePressEvent(self, event) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
-            self.clicked.emit(self._host_id)
+            self._drag_start = event.position().toPoint()
         elif event.button() == Qt.MouseButton.RightButton:
             self.context_menu_requested.emit(self._host_id, event.globalPosition().toPoint())
 
+    def mouseMoveEvent(self, event) -> None:
+        if self._drag_start is None:
+            return
+        if (event.position().toPoint() - self._drag_start).manhattanLength() < 10:
+            return
+        drag = QDrag(self)
+        mime = QMimeData()
+        mime.setData(_DRAG_MIME, str(self._host_id).encode())
+        drag.setMimeData(mime)
+
+        pixmap = QPixmap(self.size())
+        pixmap.fill(QColor(0, 0, 0, 0))
+        painter = QPainter(pixmap)
+        painter.setOpacity(0.6)
+        self.render(painter, QPoint())
+        painter.end()
+        drag.setPixmap(pixmap)
+        drag.setHotSpot(self._drag_start)
+
+        self._drag_start = None
+        drag.exec(Qt.DropAction.MoveAction)
+
+    def mouseReleaseEvent(self, event) -> None:
+        if event.button() == Qt.MouseButton.LeftButton and self._drag_start is not None:
+            self._drag_start = None
+            self.clicked.emit(self._host_id)
+
     def mouseDoubleClickEvent(self, event) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
+            self._drag_start = None
             self.double_clicked.emit(self._host_id)
+
+
+class _DropIndicator(QWidget):
+    """Thin horizontal line shown between items during drag."""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setFixedHeight(3)
+        self.setStyleSheet(f"background-color: {Colors.ACCENT}; border-radius: 1px;")
+        self.hide()
 
 
 class GroupSection(QWidget):
@@ -293,6 +350,8 @@ class GroupSection(QWidget):
     host_context_menu = Signal(int, object)
     edit_requested = Signal(int)  # group_id
     delete_requested = Signal(int)  # group_id
+    host_dropped = Signal(int, int)  # host_id, group_id
+    hosts_reordered = Signal(list)  # ordered host_ids
 
     def __init__(
         self, group: Group, hosts: list[Host],
@@ -322,13 +381,17 @@ class GroupSection(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        # Header row
-        header_widget = QWidget()
-        header_layout = QHBoxLayout(header_widget)
+        # Header row — accepts drops for "move host into this group"
+        self._header_widget = QWidget()
+        self._header_widget.setAcceptDrops(True)
+        self._header_widget.dragEnterEvent = self._header_drag_enter
+        self._header_widget.dragLeaveEvent = self._header_drag_leave
+        self._header_widget.dropEvent = self._header_drop
+        header_layout = QHBoxLayout(self._header_widget)
         header_layout.setContentsMargins(0, 0, 8, 0)
         header_layout.setSpacing(0)
 
-        self._header_btn = QPushButton(f"  ▾  {group.name}  ({len(hosts)})")
+        self._header_btn = QPushButton(f"  \u25be  {group.name}  ({len(hosts)})")
         self._header_btn.setStyleSheet(
             f"QPushButton {{ "
             f"  background: transparent; border: none; text-align: left; "
@@ -343,7 +406,7 @@ class GroupSection(QWidget):
         header_layout.addWidget(self._header_btn, 1)
 
         # Group context menu button
-        menu_btn = QPushButton("⋯")
+        menu_btn = QPushButton("\u22ef")
         menu_btn.setFixedSize(28, 28)
         menu_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         menu_btn.setStyleSheet(
@@ -357,10 +420,15 @@ class GroupSection(QWidget):
         menu_btn.clicked.connect(self._on_menu)
         header_layout.addWidget(menu_btn)
 
-        layout.addWidget(header_widget)
+        layout.addWidget(self._header_widget)
 
         # Hosts container
         self._hosts_container = QWidget()
+        self._hosts_container.setAcceptDrops(True)
+        self._hosts_container.dragEnterEvent = self._container_drag_enter
+        self._hosts_container.dragMoveEvent = self._container_drag_move
+        self._hosts_container.dragLeaveEvent = self._container_drag_leave
+        self._hosts_container.dropEvent = self._container_drop
         hosts_layout = QVBoxLayout(self._hosts_container)
         hosts_layout.setContentsMargins(12, 0, 0, 0)
         hosts_layout.setSpacing(2)
@@ -383,10 +451,39 @@ class GroupSection(QWidget):
         layout.addWidget(self._hosts_container)
         outer_layout.addWidget(content, 1)
 
+        # Drop indicator inside group
+        self._drop_indicator = _DropIndicator(self._hosts_container)
+        # Drop highlight state (for header area)
+        self._drop_highlight = False
+
+    @property
+    def group_id(self) -> int:
+        return self._group.id or 0
+
+    def _host_items(self) -> list[HostListItem]:
+        layout = self._hosts_container.layout()
+        items: list[HostListItem] = []
+        for i in range(layout.count()):
+            w = layout.itemAt(i).widget()
+            if isinstance(w, HostListItem):
+                items.append(w)
+        return items
+
+    def _drop_index(self, pos: QPoint) -> int:
+        items = self._host_items()
+        if not items:
+            return 0
+        for idx, item in enumerate(items):
+            if item.y() <= pos.y() < item.y() + item.height():
+                return idx
+        if pos.y() < items[0].y():
+            return 0
+        return len(items) - 1
+
     def _toggle(self) -> None:
         self._collapsed = not self._collapsed
         self._hosts_container.setVisible(not self._collapsed)
-        arrow = "▸" if self._collapsed else "▾"
+        arrow = "\u25b8" if self._collapsed else "\u25be"
         group = self._group
         # Update button text with correct arrow
         text = self._header_btn.text()
@@ -403,6 +500,106 @@ class GroupSection(QWidget):
             self.edit_requested.emit(self._group.id or 0)
         elif action == delete_action:
             self.delete_requested.emit(self._group.id or 0)
+
+    def _set_header_highlight(self, on: bool) -> None:
+        if on == self._drop_highlight:
+            return
+        self._drop_highlight = on
+        btn = self._header_btn
+        if on:
+            btn.setStyleSheet(
+                f"QPushButton {{ "
+                f"  background-color: rgba(124, 58, 237, 0.15); border: none; "
+                f"  text-align: left; color: {Colors.TEXT_PRIMARY}; "
+                f"  font-weight: 600; font-size: 12px; padding: 8px 12px; "
+                f"  border-radius: 4px; "
+                f"}}"
+            )
+        else:
+            btn.setStyleSheet(
+                f"QPushButton {{ "
+                f"  background: transparent; border: none; text-align: left; "
+                f"  color: {Colors.TEXT_SECONDARY}; font-weight: 600; font-size: 12px; "
+                f"  padding: 8px 12px; "
+                f"}}"
+                f"QPushButton:hover {{ color: {Colors.TEXT_PRIMARY}; "
+                f"  background-color: {Colors.BG_SURFACE}; border-radius: 4px; }}"
+            )
+
+    # Header drag — drop onto group header = move host into this group
+    def _header_drag_enter(self, event) -> None:
+        if event.mimeData().hasFormat(_DRAG_MIME):
+            event.acceptProposedAction()
+            self._set_header_highlight(True)
+
+    def _header_drag_leave(self, event) -> None:
+        self._set_header_highlight(False)
+
+    def _header_drop(self, event) -> None:
+        self._set_header_highlight(False)
+        if not event.mimeData().hasFormat(_DRAG_MIME):
+            return
+        event.acceptProposedAction()
+        host_id = int(event.mimeData().data(_DRAG_MIME).data().decode())
+        self.host_dropped.emit(host_id, self._group.id or 0)
+
+    def _clear_item_highlights(self) -> None:
+        for item in self._host_items():
+            item.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+            item.setStyleSheet(
+                f"background: transparent; border-radius: 6px;"
+            )
+
+    def _highlight_item_at(self, idx: int) -> None:
+        self._clear_item_highlights()
+        items = self._host_items()
+        if 0 <= idx < len(items):
+            items[idx].setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+            items[idx].setStyleSheet(
+                f"background-color: rgba(124, 58, 237, 0.15); border-radius: 6px;"
+            )
+
+    # Container-level drag (reorder within group)
+    def _container_drag_enter(self, event) -> None:
+        if event.mimeData().hasFormat(_DRAG_MIME):
+            event.acceptProposedAction()
+
+    def _container_drag_move(self, event) -> None:
+        if not event.mimeData().hasFormat(_DRAG_MIME):
+            return
+        event.acceptProposedAction()
+        if not self._host_items():
+            return
+        self._highlight_item_at(self._drop_index(event.position().toPoint()))
+
+    def _container_drag_leave(self, event) -> None:
+        self._clear_item_highlights()
+
+    def _container_drop(self, event) -> None:
+        self._clear_item_highlights()
+        if not event.mimeData().hasFormat(_DRAG_MIME):
+            return
+        event.acceptProposedAction()
+
+        host_id = int(event.mimeData().data(_DRAG_MIME).data().decode())
+        target_idx = self._drop_index(event.position().toPoint())
+
+        items = self._host_items()
+        ordered_ids = [it.host_id for it in items]
+
+        if host_id in ordered_ids:
+            # Reorder within group
+            old_idx = ordered_ids.index(host_id)
+            if old_idx == target_idx:
+                return
+            ordered_ids.pop(old_idx)
+            ordered_ids.insert(target_idx, host_id)
+            self.hosts_reordered.emit(ordered_ids)
+        else:
+            # Moving from outside into this group at specific position
+            ordered_ids.insert(target_idx, host_id)
+            self.host_dropped.emit(host_id, self._group.id or 0)
+            self.hosts_reordered.emit(ordered_ids)
 
 
 class HostListWidget(QWidget):
@@ -438,12 +635,12 @@ class HostListWidget(QWidget):
         tb_layout.setSpacing(8)
 
         self._search = QLineEdit()
-        self._search.setPlaceholderText("Search hosts…")
+        self._search.setPlaceholderText("Search hosts\u2026")
         self._search.setProperty("cssClass", "search")
         tb_layout.addWidget(self._search, 1)
 
         # Filter toggle button
-        self._filter_btn = QPushButton("⛛ Filter")
+        self._filter_btn = QPushButton("\u26db Filter")
         self._filter_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._filter_btn.setCheckable(True)
         self._filter_btn.setStyleSheet(
@@ -506,12 +703,20 @@ class HostListWidget(QWidget):
         self._scroll.setWidgetResizable(True)
         self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self._content = QWidget()
+        self._content.setAcceptDrops(True)
+        self._content.dragEnterEvent = self._on_drag_enter
+        self._content.dragMoveEvent = self._on_drag_move
+        self._content.dragLeaveEvent = self._on_drag_leave
+        self._content.dropEvent = self._on_drop
         self._content_layout = QVBoxLayout(self._content)
         self._content_layout.setContentsMargins(8, 8, 8, 8)
         self._content_layout.setSpacing(4)
         self._content_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
         self._scroll.setWidget(self._content)
         layout.addWidget(self._scroll)
+
+        # Drop indicator
+        self._drop_indicator = _DropIndicator(self._content)
 
         # Empty state
         self._empty_state = EmptyState(
@@ -539,6 +744,95 @@ class HostListWidget(QWidget):
         self._search.textChanged.connect(lambda: self._debounce.start())
 
         self.refresh()
+
+    # --- Drag & drop on ungrouped area ---
+
+    def _ungrouped_items(self) -> list[HostListItem]:
+        items: list[HostListItem] = []
+        for i in range(self._content_layout.count()):
+            w = self._content_layout.itemAt(i).widget()
+            if isinstance(w, HostListItem):
+                items.append(w)
+        return items
+
+    def _drop_index(self, pos: QPoint) -> int:
+        items = self._ungrouped_items()
+        if not items:
+            return 0
+        for idx, item in enumerate(items):
+            if item.y() <= pos.y() < item.y() + item.height():
+                return idx
+        if pos.y() < items[0].y():
+            return 0
+        return len(items) - 1
+
+    def _clear_ungrouped_highlights(self) -> None:
+        for item in self._ungrouped_items():
+            item.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+            item.setStyleSheet(
+                f"background: transparent; border-radius: 6px;"
+            )
+
+    def _highlight_ungrouped_at(self, idx: int) -> None:
+        self._clear_ungrouped_highlights()
+        items = self._ungrouped_items()
+        if 0 <= idx < len(items):
+            items[idx].setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+            items[idx].setStyleSheet(
+                f"background-color: rgba(124, 58, 237, 0.15); border-radius: 6px;"
+            )
+
+    def _on_drag_enter(self, event) -> None:
+        if event.mimeData().hasFormat(_DRAG_MIME):
+            event.acceptProposedAction()
+
+    def _on_drag_move(self, event) -> None:
+        if not event.mimeData().hasFormat(_DRAG_MIME):
+            return
+        event.acceptProposedAction()
+        if not self._ungrouped_items():
+            return
+        self._highlight_ungrouped_at(self._drop_index(event.position().toPoint()))
+
+    def _on_drag_leave(self, event) -> None:
+        self._clear_ungrouped_highlights()
+
+    def _on_drop(self, event) -> None:
+        self._clear_ungrouped_highlights()
+        if not event.mimeData().hasFormat(_DRAG_MIME):
+            return
+        event.acceptProposedAction()
+
+        host_id = int(event.mimeData().data(_DRAG_MIME).data().decode())
+
+        # Move host to ungrouped
+        self._host_manager.move_host_to_group(host_id, None)
+
+        # Reorder ungrouped hosts
+        items = self._ungrouped_items()
+        target_idx = self._drop_index(event.position().toPoint())
+        ordered_ids = [it.host_id for it in items]
+        # Remove if already in list (was ungrouped)
+        if host_id in ordered_ids:
+            old_idx = ordered_ids.index(host_id)
+            if old_idx == target_idx:
+                return
+            ordered_ids.pop(old_idx)
+        ordered_ids.insert(target_idx, host_id)
+        self._host_manager.reorder_hosts(ordered_ids)
+        self.refresh()
+
+    def _on_host_dropped_to_group(self, host_id: int, group_id: int) -> None:
+        """Handle a host being dropped onto a group section."""
+        self._host_manager.move_host_to_group(host_id, group_id)
+        self.refresh()
+
+    def _on_hosts_reordered(self, ordered_ids: list[int]) -> None:
+        """Handle reordering of hosts within a group."""
+        self._host_manager.reorder_hosts(ordered_ids)
+        self.refresh()
+
+    # --- Regular methods ---
 
     def _toggle_filter_bar(self) -> None:
         visible = self._filter_btn.isChecked()
@@ -674,6 +968,8 @@ class HostListWidget(QWidget):
             section.host_context_menu.connect(self._on_context_menu)
             section.edit_requested.connect(self._edit_group)
             section.delete_requested.connect(self._delete_group)
+            section.host_dropped.connect(self._on_host_dropped_to_group)
+            section.hosts_reordered.connect(self._on_hosts_reordered)
             self._content_layout.addWidget(section)
 
         # Refresh tag chips in filter bar (in case tags changed)

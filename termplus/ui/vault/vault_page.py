@@ -56,6 +56,7 @@ class VaultPage(QWidget):
     connect_requested = Signal(int)  # host_id
     sftp_requested = Signal(int)  # host_id
     snippet_run_requested = Signal(str)  # script content
+    snippet_broadcast_requested = Signal(str)  # script content
 
     def __init__(
         self,
@@ -103,6 +104,9 @@ class VaultPage(QWidget):
             self._snippets_section: QWidget = SnippetListView(snippet_manager)
             self._snippets_section.snippet_run_requested.connect(
                 self.snippet_run_requested.emit
+            )
+            self._snippets_section.snippet_broadcast_requested.connect(
+                self.snippet_broadcast_requested.emit
             )
         else:
             self._snippets_section = _PlaceholderSection("Snippets")

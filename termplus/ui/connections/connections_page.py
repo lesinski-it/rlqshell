@@ -1146,7 +1146,7 @@ class ConnectionsPage(QWidget):
         if not active or active not in self._sessions:
             return False
         widget, conn = self._sessions[active]
-        if conn is None or isinstance(conn, (VNCConnection, RDPConnection)):
+        if conn is None or conn.protocol in ("vnc", "rdp"):
             return False
         # Split view — send to the focused panel
         if isinstance(widget, SplitContainer):
@@ -1157,6 +1157,37 @@ class ConnectionsPage(QWidget):
             return False
         conn.send(script.encode("utf-8") + b"\n")
         return True
+
+    def get_terminal_sessions(self) -> list[tuple[str, str]]:
+        """Return ``(tab_id, label)`` for all text-based sessions."""
+        result: list[tuple[str, str]] = []
+        for tab_id, (widget, conn) in self._sessions.items():
+            if conn is None or conn.protocol in ("vnc", "rdp"):
+                continue
+            tab_btn = self._tab_bar._tabs.get(tab_id)
+            label = tab_btn.label_text if tab_btn else tab_id
+            result.append((tab_id, label))
+        return result
+
+    def send_to_terminals(self, script: str, tab_ids: list[str]) -> int:
+        """Send *script* to the given terminal tabs. Returns the count sent."""
+        sent = 0
+        data = script.encode("utf-8") + b"\n"
+        for tab_id in tab_ids:
+            if tab_id not in self._sessions:
+                continue
+            widget, conn = self._sessions[tab_id]
+            if conn is None or conn.protocol in ("vnc", "rdp"):
+                continue
+            if isinstance(widget, SplitContainer):
+                for panel in widget.panels:
+                    if panel.connection:
+                        panel.connection.send(data)
+                        sent += 1
+            else:
+                conn.send(data)
+                sent += 1
+        return sent
 
     def set_tab_bar_visible(self, visible: bool) -> None:
         """Show or hide the connection tab bar and status bar (for fullscreen mode)."""

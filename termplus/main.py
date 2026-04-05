@@ -156,6 +156,32 @@ def main() -> None:
 
     vault_page.snippet_run_requested.connect(_on_snippet_run)
 
+    def _on_snippet_broadcast(script: str) -> None:
+        from termplus.ui.widgets.toast import ToastManager
+
+        sessions = connections_page.get_terminal_sessions()
+        if not sessions:
+            ToastManager.instance().show_toast(
+                "No active terminals — connect to a host first.",
+            )
+            return
+
+        from termplus.ui.dialogs.snippet_target_dialog import SnippetTargetDialog
+
+        dlg = SnippetTargetDialog(sessions, parent=window)
+        if dlg.exec() != SnippetTargetDialog.DialogCode.Accepted:
+            return
+        selected = dlg.selected_tab_ids
+        if not selected:
+            return
+        count = connections_page.send_to_terminals(script, selected)
+        window.top_bar.navigate_to(TopBar.PAGE_CONNECTIONS)
+        ToastManager.instance().show_toast(
+            f"Snippet sent to {count} terminal(s).", toast_type="success",
+        )
+
+    vault_page.snippet_broadcast_requested.connect(_on_snippet_broadcast)
+
     def go_to_vault_hosts() -> None:
         """Navigate to the Vault and ensure the Hosts section is visible."""
         window.top_bar.navigate_to(TopBar.PAGE_VAULT)

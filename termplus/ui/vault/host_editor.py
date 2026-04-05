@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 
 from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtGui import QColor, QIcon, QPixmap
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -533,7 +534,9 @@ class HostEditorContent(QWidget):
         # Existing tags not yet assigned
         available = [t for t in all_tags if t.id not in current_ids]
         for tag in available:
-            action = menu.addAction(f"● {tag.name}")
+            pixmap = QPixmap(12, 12)
+            pixmap.fill(QColor(tag.color or "#6c757d"))
+            action = menu.addAction(QIcon(pixmap), tag.name)
             action.setData(("assign", tag))
 
         if available:
