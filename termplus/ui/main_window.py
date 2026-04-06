@@ -6,6 +6,7 @@ import logging
 
 from PySide6.QtCore import QEasingCurve, QPropertyAnimation, QSize, Qt, QTimer, Signal
 from PySide6.QtWidgets import (
+    QApplication,
     QGraphicsOpacityEffect,
     QHBoxLayout,
     QLabel,
@@ -178,6 +179,21 @@ class MainWindow(QMainWindow):
 
     def _on_settings_requested(self) -> None:
         logger.info("Settings requested — dialog coming in Stage 8")
+
+    def apply_appearance(self, config: ConfigManager) -> None:
+        """Apply appearance settings (UI font, font size, window opacity)."""
+        from termplus.ui.themes.theme_manager import ThemeManager
+
+        app = QApplication.instance()
+        if app:
+            theme_name = config.get("appearance.theme", "dark")
+            ui_font = config.get("appearance.ui_font", "Inter")
+            ui_font_size = config.get("appearance.ui_font_size", 13)
+            ThemeManager().apply_theme(app, theme_name, ui_font=ui_font, ui_font_size=ui_font_size)
+
+        # Window opacity
+        opacity = config.get("appearance.opacity", 100)
+        self.setWindowOpacity(max(0.5, min(1.0, opacity / 100.0)))
 
     def set_config(self, config: ConfigManager) -> None:
         """Set the config manager for persistent settings."""

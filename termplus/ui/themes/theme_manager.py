@@ -39,12 +39,47 @@ class ThemeManager:
             return ""
         return qss_path.read_text(encoding="utf-8")
 
-    def apply_theme(self, app: QApplication, theme_name: str = "dark") -> None:
-        """Apply a theme to the application."""
+    def apply_theme(
+        self,
+        app: QApplication,
+        theme_name: str = "dark",
+        ui_font: str | None = None,
+        ui_font_size: int | None = None,
+    ) -> None:
+        """Apply a theme to the application, optionally overriding font settings."""
         stylesheet = self.load_theme(theme_name)
-        if stylesheet:
-            app.setStyleSheet(stylesheet)
-            self._current_theme = theme_name
-            logger.info("Applied theme: %s", theme_name)
-        else:
+        if not stylesheet:
             logger.warning("Could not apply theme: %s", theme_name)
+            return
+
+        if ui_font or ui_font_size:
+            import re
+
+            def _replace_qwidget_block(m: re.Match) -> str:
+                block = m.group(0)
+                if ui_font:
+                    font_val = f'"{ui_font}"' if ui_font != "System Default" else '"Segoe UI", sans-serif'
+                    block = re.sub(
+                        r'font-family:\s*[^;]+;',
+                        f'font-family: {font_val};',
+                        block,
+                    )
+                if ui_font_size:
+                    block = re.sub(
+                        r'font-size:\s*\d+px;',
+                        f'font-size: {ui_font_size}px;',
+                        block,
+                        count=1,
+                    )
+                return block
+
+            stylesheet = re.sub(
+                r'QWidget\s*\{[^}]+\}',
+                _replace_qwidget_block,
+                stylesheet,
+                count=1,
+            )
+
+        app.setStyleSheet(stylesheet)
+        self._current_theme = theme_name
+        logger.info("Applied theme: %s (font=%s, size=%s)", theme_name, ui_font, ui_font_size)

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QComboBox,
     QFormLayout,
@@ -19,6 +19,8 @@ from termplus.app.constants import Colors
 
 class AppearanceSettings(QWidget):
     """Appearance configuration panel."""
+
+    appearance_settings_changed = Signal()
 
     def __init__(self, config: ConfigManager, parent=None) -> None:
         super().__init__(parent)
@@ -88,3 +90,4 @@ class AppearanceSettings(QWidget):
     def _save(self, key: str, value) -> None:
         self._config.set(key, value)
         self._config.save()
+        self.appearance_settings_changed.emit()

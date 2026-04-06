@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QComboBox,
     QFormLayout,
@@ -19,6 +19,8 @@ from termplus.ui.widgets.toggle_switch import ToggleSwitch
 
 class TerminalSettings(QWidget):
     """Terminal configuration panel."""
+
+    terminal_settings_changed = Signal()
 
     def __init__(self, config: ConfigManager, parent=None) -> None:
         super().__init__(parent)
@@ -42,8 +44,8 @@ class TerminalSettings(QWidget):
         # Font family
         self._font_combo = QComboBox()
         self._font_combo.addItems([
-            "JetBrains Mono", "Fira Code", "Cascadia Code",
-            "Source Code Pro", "Consolas", "Monaco",
+            "Cascadia Code", "Consolas", "Courier New",
+            "Fira Code", "JetBrains Mono",
         ])
         self._font_combo.setCurrentText(config.get("terminal.font_family", "JetBrains Mono"))
         self._font_combo.currentTextChanged.connect(
@@ -111,3 +113,4 @@ class TerminalSettings(QWidget):
     def _save(self, key: str, value) -> None:
         self._config.set(key, value)
         self._config.save()
+        self.terminal_settings_changed.emit()

@@ -234,6 +234,8 @@ class ConnectionsPage(QWidget):
             tab_id = str(uuid.uuid4())[:8]
             label = host.label or host.address
             terminal = TerminalWidget()
+            if self._config:
+                terminal.apply_config(self._config)
             self._terminal_stack.addWidget(terminal)
             terminal.show_overlay(
                 f"Protocol \"{host.protocol.upper()}\" is not yet supported.",
@@ -260,6 +262,8 @@ class ConnectionsPage(QWidget):
         label = host.label or host.address
 
         terminal = TerminalWidget()
+        if self._config:
+            terminal.apply_config(self._config)
         self._terminal_stack.addWidget(terminal)
 
         password, pkey = self._resolve_credentials(host)
@@ -876,6 +880,8 @@ class ConnectionsPage(QWidget):
 
         # Create new terminal + connection for the new panel
         new_terminal = TerminalWidget()
+        if self._config:
+            new_terminal.apply_config(self._config)
         new_terminal._freeze_resize = True
         password, pkey = self._resolve_credentials(host)
         hk_callback = HostKeyVerifyCallback(self._verify_host_key)
@@ -1135,6 +1141,18 @@ class ConnectionsPage(QWidget):
         if active in tab_ids:
             idx = (tab_ids.index(active) - 1) % len(tab_ids)
             self._tab_bar.select_tab(tab_ids[idx])
+
+    def refresh_terminal_config(self) -> None:
+        """Re-apply terminal settings from config to all open terminals."""
+        if not self._config:
+            return
+        for _tab_id, (widget, _conn) in self._sessions.items():
+            if isinstance(widget, TerminalWidget):
+                widget.apply_config(self._config)
+            else:
+                # Split view — find nested TerminalWidgets
+                for tw in widget.findChildren(TerminalWidget):
+                    tw.apply_config(self._config)
 
     def send_to_active_terminal(self, script: str) -> bool:
         """Send a script/command to the currently active terminal session.

@@ -41,7 +41,9 @@ def main() -> None:
 
     theme_mgr = ThemeManager()
     theme_name = app.config.get("appearance.theme", "dark")
-    theme_mgr.apply_theme(app, theme_name)
+    ui_font = app.config.get("appearance.ui_font", "Inter")
+    ui_font_size = app.config.get("appearance.ui_font_size", 13)
+    theme_mgr.apply_theme(app, theme_name, ui_font=ui_font, ui_font_size=ui_font_size)
 
     # Install qasync event loop BEFORE creating any widgets that need async
     splash.update_progress(15, "Initializing event loop…")
@@ -110,6 +112,7 @@ def main() -> None:
     from termplus.ui.main_window import MainWindow
     window = MainWindow()
     window.set_config(app.config)
+    window.apply_appearance(app.config)
 
     # Install real Vault page
     vault_page = VaultPage(
@@ -206,6 +209,14 @@ def main() -> None:
     # Command Palette (Ctrl+K)
     palette = CommandPalette(window)
 
+    def _open_settings():
+        dlg = SettingsDialog(app.config, window, sync_engine=sync_engine)
+        dlg.terminal_settings_changed.connect(connections_page.refresh_terminal_config)
+        dlg.appearance_settings_changed.connect(
+            lambda: window.apply_appearance(app.config)
+        )
+        dlg.exec()
+
     def _build_palette_items() -> list[PaletteItem]:
         items: list[PaletteItem] = []
         for host in vault.hosts.list_hosts():
@@ -217,7 +228,7 @@ def main() -> None:
             ))
         items.append(PaletteItem(
             title="Settings", category="Action",
-            action=lambda: SettingsDialog(app.config, window, sync_engine=sync_engine).exec(),
+            action=_open_settings,
         ))
         items.append(PaletteItem(
             title="New Host", category="Action",
@@ -239,9 +250,7 @@ def main() -> None:
 
     # Settings shortcut (Ctrl+,)
     shortcut_settings = QShortcut(QKeySequence("Ctrl+,"), window)
-    shortcut_settings.activated.connect(
-        lambda: SettingsDialog(app.config, window, sync_engine=sync_engine).exec()
-    )
+    shortcut_settings.activated.connect(_open_settings)
 
     # Keyboard shortcuts: Ctrl+W close tab, Ctrl+Tab/Ctrl+Shift+Tab switch tabs
     sc_close_tab = QShortcut(QKeySequence("Ctrl+W"), window)
@@ -292,9 +301,7 @@ def main() -> None:
 
     # Wire settings button in top bar
     window.top_bar.settings_requested.disconnect()
-    window.top_bar.settings_requested.connect(
-        lambda: SettingsDialog(app.config, window, sync_engine=sync_engine).exec()
-    )
+    window.top_bar.settings_requested.connect(_open_settings)
 
     # Cleanup on close
     def _cleanup() -> None:

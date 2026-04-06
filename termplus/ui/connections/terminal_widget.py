@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 import logging
+from pathlib import Path
 
 import pyte
 
@@ -142,8 +144,14 @@ class TerminalWidget(QWidget):
         self._scrollback = scrollback
         self._scroll_speed = max(1, scroll_speed)
 
+        # Cursor style: "block", "underline", or "bar"
+        self._cursor_style = "block"
+        self._cursor_color = QColor("#f5e0dc")
+        self._selection_color = QColor("#585b70")
+
         # Cursor blink
         self._cursor_visible = True
+        self._cursor_blink_enabled = True
         self._cursor_timer = QTimer(self)
         self._cursor_timer.timeout.connect(self._blink_cursor)
         self._cursor_timer.start(530)
@@ -174,9 +182,10 @@ class TerminalWidget(QWidget):
         # Scroll offset into history (0 = bottom)
         self._scroll_offset = 0
 
-        # Background
+        # Background & per-instance ANSI palette
         self._bg_color = QColor("#1e1e2e")
         self._fg_color = QColor("#cdd6f4")
+        self._ansi_colors: dict[str, str] = dict(_ANSI_COLORS)
 
         # Overlay (status messages like "Connecting...", errors)
         self._overlay_text: str | None = None
@@ -255,6 +264,68 @@ class TerminalWidget(QWidget):
         self._sync_scrollbar_from_offset()
         self.update()
 
+    def apply_config(self, config) -> None:
+        """Apply terminal settings from ConfigManager."""
+        # Font
+        family = config.get("terminal.font_family", "JetBrains Mono")
+        size = config.get("terminal.font_size", 13)
+        if family != self._font.family() or size != self._font.pointSize():
+            self.set_font(family, size)
+            self._default_font_size = size
+
+        # Cursor style
+        self._cursor_style = config.get("terminal.cursor_style", "block")
+
+        # Cursor blink
+        blink = config.get("terminal.cursor_blink", True)
+        self._cursor_blink_enabled = blink
+        if not blink:
+            self._cursor_visible = True
+
+        # Color scheme
+        scheme_name = config.get("terminal.color_scheme", "termplus-default")
+        self._apply_color_scheme(scheme_name)
+
+        self.update()
+
+    def _apply_color_scheme(self, scheme_name: str) -> None:
+        """Load a color scheme from terminal_schemes.json and apply it."""
+        schemes_path = Path(__file__).resolve().parent.parent / "themes" / "terminal_schemes.json"
+        if not schemes_path.exists():
+            return
+        try:
+            schemes = json.loads(schemes_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            return
+        scheme = schemes.get(scheme_name)
+        if not scheme:
+            return
+
+        self._bg_color = QColor(scheme.get("background", "#1e1e2e"))
+        self._fg_color = QColor(scheme.get("foreground", "#cdd6f4"))
+        self._cursor_color = QColor(scheme.get("cursor", "#f5e0dc"))
+        self._selection_color = QColor(scheme.get("selection", "#45475a"))
+
+        # Update per-instance ANSI palette from scheme
+        p = self._ansi_colors
+        p["black"] = scheme.get("black", p["black"])
+        p["red"] = scheme.get("red", p["red"])
+        p["green"] = scheme.get("green", p["green"])
+        p["yellow"] = scheme.get("yellow", p["yellow"])
+        p["blue"] = scheme.get("blue", p["blue"])
+        p["magenta"] = scheme.get("magenta", p["magenta"])
+        p["cyan"] = scheme.get("cyan", p["cyan"])
+        p["white"] = scheme.get("white", p["white"])
+        p["brightblack"] = scheme.get("bright_black", p["brightblack"])
+        p["brightred"] = scheme.get("bright_red", p["brightred"])
+        p["brightgreen"] = scheme.get("bright_green", p["brightgreen"])
+        p["brightyellow"] = scheme.get("bright_yellow", p["brightyellow"])
+        p["brightblue"] = scheme.get("bright_blue", p["brightblue"])
+        p["brightmagenta"] = scheme.get("bright_magenta", p["brightmagenta"])
+        p["brightcyan"] = scheme.get("bright_cyan", p["brightcyan"])
+        p["brightwhite"] = scheme.get("bright_white", p["brightwhite"])
+        p["default"] = scheme.get("foreground", p["default"])
+
     # --- Rendering ---
 
     def paintEvent(self, event: QPaintEvent) -> None:
@@ -293,8 +364,8 @@ class TerminalWidget(QWidget):
 
                     # Selection highlight
                     if self._is_selected(col_idx, row_idx):
-                        bg = QColor("#585b70")
-                        fg_color = QColor("#cdd6f4")
+                        bg = self._selection_color
+                        fg_color = self._fg_color
 
                     if bg != self._bg_color:
                         painter.fillRect(QRectF(x, y, cw, ch), bg)
@@ -325,11 +396,22 @@ class TerminalWidget(QWidget):
             if self._cursor_visible and self._scroll_offset == 0:
                 cx = screen.cursor.x * cw
                 cy = screen.cursor.y * ch
-                painter.setPen(Qt.PenStyle.NoPen)
-                painter.setBrush(QColor("#f5e0dc"))
-                painter.setOpacity(0.7)
-                painter.drawRect(QRectF(cx, cy, cw, ch))
-                painter.setOpacity(1.0)
+                cursor_color = self._cursor_color
+                if self._cursor_style == "underline":
+                    painter.setPen(cursor_color)
+                    uy = cy + ch - 2
+                    painter.drawLine(int(cx), int(uy), int(cx + cw), int(uy))
+                    painter.drawLine(int(cx), int(uy + 1), int(cx + cw), int(uy + 1))
+                elif self._cursor_style == "bar":
+                    painter.setPen(Qt.PenStyle.NoPen)
+                    painter.setBrush(cursor_color)
+                    painter.drawRect(QRectF(cx, cy, 2, ch))
+                else:  # block
+                    painter.setPen(Qt.PenStyle.NoPen)
+                    painter.setBrush(cursor_color)
+                    painter.setOpacity(0.7)
+                    painter.drawRect(QRectF(cx, cy, cw, ch))
+                    painter.setOpacity(1.0)
 
             # Scroll-to-bottom indicator
             if self._scroll_offset > 0:
@@ -722,6 +804,11 @@ class TerminalWidget(QWidget):
         return visible
 
     def _blink_cursor(self) -> None:
+        if not self._cursor_blink_enabled:
+            if not self._cursor_visible:
+                self._cursor_visible = True
+                self.update()
+            return
         self._cursor_visible = not self._cursor_visible
         # Only repaint the cursor area for efficiency
         if self._screen:
@@ -736,15 +823,16 @@ class TerminalWidget(QWidget):
 
         # Named color
         lower = color.lower()
-        if lower in _ANSI_COLORS:
-            return QColor(_ANSI_COLORS[lower])
+        palette = self._ansi_colors
+        if lower in palette:
+            return QColor(palette[lower])
 
         # 256-color index
         if color.isdigit():
             idx = int(color)
             if idx < 16:
-                names = list(_ANSI_COLORS.keys())[:16]
-                return QColor(_ANSI_COLORS[names[idx]])
+                names = list(palette.keys())[:16]
+                return QColor(palette[names[idx]])
             elif idx < 232:
                 # 6x6x6 color cube
                 idx -= 16

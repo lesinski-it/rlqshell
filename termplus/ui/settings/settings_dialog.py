@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QDialog,
     QHBoxLayout,
@@ -27,6 +27,9 @@ logger = logging.getLogger(__name__)
 
 class SettingsDialog(QDialog):
     """Modal settings dialog with sidebar navigation."""
+
+    terminal_settings_changed = Signal()
+    appearance_settings_changed = Signal()
 
     def __init__(self, config: ConfigManager, parent=None, sync_engine=None) -> None:
         super().__init__(parent)
@@ -70,8 +73,12 @@ class SettingsDialog(QDialog):
 
         # Add settings pages
         self._add_page("General", GeneralSettings(config))
-        self._add_page("Terminal", TerminalSettings(config))
-        self._add_page("Appearance", AppearanceSettings(config))
+        terminal_page = TerminalSettings(config)
+        terminal_page.terminal_settings_changed.connect(self.terminal_settings_changed)
+        self._add_page("Terminal", terminal_page)
+        appearance_page = AppearanceSettings(config)
+        appearance_page.appearance_settings_changed.connect(self.appearance_settings_changed)
+        self._add_page("Appearance", appearance_page)
         self._add_page("Key Bindings", KeybindingSettings(config))
         self._add_page("Sync", SyncSettings(config, sync_engine=sync_engine))
 
