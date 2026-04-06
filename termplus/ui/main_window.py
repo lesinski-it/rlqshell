@@ -158,12 +158,23 @@ class MainWindow(QMainWindow):
         self._stack.insertWidget(TopBar.PAGE_SFTP, page)
         self._restore_stack_index()
 
+    def set_port_forward_page(self, page: QWidget) -> None:
+        """Replace the placeholder port forwarding page."""
+        self._stack.removeWidget(self._pf_page)
+        self._pf_page.deleteLater()
+        self._pf_page = page
+        self._stack.insertWidget(TopBar.PAGE_PORT_FORWARD, page)
+        self._restore_stack_index()
+
     def _restore_stack_index(self) -> None:
         """Re-sync stack index with top bar after widget replacement."""
         self._stack.setCurrentIndex(self._top_bar._current_index)
 
     def _on_page_changed(self, index: int) -> None:
         self._stack.setCurrentIndex(index)
+        # Auto-refresh Port Forwarding page when navigated to
+        if index == TopBar.PAGE_PORT_FORWARD and hasattr(self._pf_page, "refresh"):
+            self._pf_page.refresh()
         logger.debug("Switched to page %d", index)
 
     def set_fullscreen_bar_visible(self, visible: bool) -> None:

@@ -61,12 +61,14 @@ def main() -> None:
     from termplus.core.history_manager import HistoryManager
     from termplus.core.known_hosts import KnownHostsManager
     from termplus.core.port_forward_manager import PortForwardManager
+    from termplus.core.tunnel_engine import TunnelEngine
     from termplus.core.sync.conflict_resolver import ConflictResolver
     from termplus.core.sync.sync_engine import SyncEngine
     from termplus.core.sync.sync_state import SyncState
     from termplus.core.vault import Vault
     from termplus.ui.command_palette import CommandPalette, PaletteItem
     from termplus.ui.connections.connections_page import ConnectionsPage
+    from termplus.ui.port_forward.port_forward_page import PortForwardPage
     from termplus.ui.settings.settings_dialog import SettingsDialog
     from termplus.ui.sftp.sftp_page import SFTPPage
     from termplus.ui.top_bar import TopBar
@@ -102,6 +104,7 @@ def main() -> None:
     history_mgr = HistoryManager(db)
     pf_mgr = PortForwardManager(db)
     connection_pool = ConnectionPool()
+    tunnel_engine = TunnelEngine(vault.hosts, credential_store, keychain)
 
     # Cloud sync
     sync_state = SyncState(app.config.data_dir / "sync_state.json")
@@ -198,12 +201,20 @@ def main() -> None:
     window.set_sftp_page(sftp_page)
     sftp_page.new_session_requested.connect(go_to_vault_hosts)
 
-    # Update connection/SFTP counts in top bar
+    # Install Port Forwarding page
+    pf_page = PortForwardPage(pf_mgr, tunnel_engine, vault.hosts)
+    window.set_port_forward_page(pf_page)
+    pf_page.navigate_to_vault.connect(go_to_vault_hosts)
+
+    # Update connection/SFTP/tunnel counts in top bar
     connections_page.connection_count_changed.connect(
         window.top_bar.set_connection_count
     )
     sftp_page.session_count_changed.connect(
         window.top_bar.set_sftp_count
+    )
+    pf_page.tunnel_count_changed.connect(
+        window.top_bar.set_tunnel_count
     )
 
     # Command Palette (Ctrl+K)
@@ -306,6 +317,7 @@ def main() -> None:
     # Cleanup on close
     def _cleanup() -> None:
         logger.info("Cleaning up resources…")
+        tunnel_engine.stop_all()
         connection_pool.close_all()
         sync_engine.stop_auto_sync()
         credential_store.lock()
