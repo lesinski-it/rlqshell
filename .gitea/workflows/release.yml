@@ -90,7 +90,7 @@ jobs:
         run: |
           $v = (Get-Content version_tag.txt -Raw).Trim()
           # PATH z poprzedniego kroku nie przechodzi — build-msi.ps1 sam dokleja .dotnet do PATH
-          pwsh -NoProfile -ExecutionPolicy Bypass -File installer/build-msi.ps1 -Version $v
+          & installer/build-msi.ps1 -Version $v
           if ($LASTEXITCODE -ne 0) { throw "build-msi.ps1 failed" }
 
       - name: Oblicz SHA256 i generuj version.json
