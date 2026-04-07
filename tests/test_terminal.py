@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from termplus.protocols.ssh.connection import SSHConnection
+from rlqshell.protocols.ssh.connection import SSHConnection
 
 
 # === TerminalWidget (requires QApplication) ===
@@ -12,7 +12,7 @@ from termplus.protocols.ssh.connection import SSHConnection
 @pytest.fixture
 def terminal(qtbot):
     """Create a TerminalWidget for testing."""
-    from termplus.ui.connections.terminal_widget import TerminalWidget
+    from rlqshell.ui.connections.terminal_widget import TerminalWidget
 
     widget = TerminalWidget(cols=80, rows=24)
     qtbot.addWidget(widget)
@@ -25,11 +25,11 @@ def test_terminal_initial_size(terminal):
 
 
 def test_terminal_feed_text(terminal):
-    terminal.feed(b"Hello, Termplus!")
+    terminal.feed(b"Hello, RLQShell!")
     # Text should be in the pyte screen buffer
     line = terminal._screen.buffer[0]
     text = "".join(line[c].data for c in range(16))
-    assert text == "Hello, Termplus!"
+    assert text == "Hello, RLQShell!"
 
 
 def test_terminal_feed_ansi_colors(terminal):

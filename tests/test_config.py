@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from termplus.app.config import ConfigManager
+from rlqshell.app.config import ConfigManager
 
 
 def test_config_creates_defaults(tmp_path: Path) -> None:
@@ -51,7 +51,7 @@ def test_config_reset(tmp_path: Path) -> None:
 def test_config_paths(tmp_path: Path) -> None:
     """Data paths are derived correctly."""
     config = ConfigManager(data_dir=tmp_path)
-    assert config.db_path == tmp_path / "termplus.db"
+    assert config.db_path == tmp_path / "rlqshell.db"
     assert config.vault_key_path == tmp_path / "vault.key"
     assert config.log_dir.exists()
     assert config.backups_dir.exists()

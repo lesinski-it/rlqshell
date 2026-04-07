@@ -6,10 +6,10 @@ from pathlib import Path
 
 import pytest
 
-from termplus.core.credential_store import CredentialStore
-from termplus.core.database import Database
-from termplus.core.keychain import Keychain
-from termplus.utils.crypto import decrypt, derive_key, encrypt, generate_salt
+from rlqshell.core.credential_store import CredentialStore
+from rlqshell.core.database import Database
+from rlqshell.core.keychain import Keychain
+from rlqshell.utils.crypto import decrypt, derive_key, encrypt, generate_salt
 
 
 # === Crypto utils ===
@@ -17,7 +17,7 @@ from termplus.utils.crypto import decrypt, derive_key, encrypt, generate_salt
 def test_encrypt_decrypt_roundtrip():
     salt = generate_salt()
     key = derive_key("test-password", salt)
-    plaintext = b"Hello, Termplus!"
+    plaintext = b"Hello, RLQShell!"
     ciphertext = encrypt(plaintext, key)
     assert ciphertext != plaintext
     assert decrypt(ciphertext, key) == plaintext

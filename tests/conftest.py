@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from termplus.app.config import ConfigManager
+from rlqshell.app.config import ConfigManager
 
 
 @pytest.fixture

@@ -3,14 +3,14 @@ requires = ["setuptools>=70.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "termplus"
+name = "rlqshell"
 version = "0.1.0"
-description = "Modern cross-platform SSH client inspired by Termius"
+description = "Modern cross-platform SSH client with private-cloud sync"
 readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.12"
 authors = [
-    {name = "Termplus Contributors"},
+    {name = "RLQShell Contributors"},
 ]
 keywords = ["ssh", "terminal", "sftp", "rdp", "vnc"]
 classifiers = [
@@ -50,14 +50,14 @@ dev = [
     "pytest-asyncio>=0.23",
     "ruff>=0.4",
 ]
-all = ["termplus[serial,telnet,vnc,dev]"]
+all = ["rlqshell[serial,telnet,vnc,dev]"]
 
 [project.scripts]
-termplus = "termplus.main:main"
+rlqshell = "rlqshell.main:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["termplus*"]
+include = ["rlqshell*"]
 
 [tool.ruff]
 target-version = "py312"

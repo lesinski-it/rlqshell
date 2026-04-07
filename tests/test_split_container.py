@@ -5,9 +5,9 @@ from __future__ import annotations
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QPushButton
 
-from termplus.ui.connections.connections_page import ConnectionsPage
-from termplus.ui.connections.split_container import SplitContainer
-from termplus.ui.connections.terminal_widget import TerminalWidget
+from rlqshell.ui.connections.connections_page import ConnectionsPage
+from rlqshell.ui.connections.split_container import SplitContainer
+from rlqshell.ui.connections.terminal_widget import TerminalWidget
 
 
 class _DummyConnection:

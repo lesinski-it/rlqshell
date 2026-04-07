@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from termplus.core.database import Database
-from termplus.core.host_manager import HostManager
-from termplus.core.models.host import Group, Host, Tag
-from termplus.core.models.snippet import Snippet, SnippetPackage
-from termplus.core.snippet_manager import SnippetManager
-from termplus.core.vault import Vault
+from rlqshell.core.database import Database
+from rlqshell.core.host_manager import HostManager
+from rlqshell.core.models.host import Group, Host, Tag
+from rlqshell.core.models.snippet import Snippet, SnippetPackage
+from rlqshell.core.snippet_manager import SnippetManager
+from rlqshell.core.vault import Vault
 
 
 def _make_db(tmp_path) -> Database:

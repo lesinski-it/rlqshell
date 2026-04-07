@@ -6,9 +6,9 @@ from pathlib import Path
 
 import pytest
 
-from termplus.core.database import Database
-from termplus.core.known_hosts import HostKeyStatus, KnownHostsManager
-from termplus.ui.command_palette import fuzzy_score
+from rlqshell.core.database import Database
+from rlqshell.core.known_hosts import HostKeyStatus, KnownHostsManager
+from rlqshell.ui.command_palette import fuzzy_score
 
 
 # === KnownHostsManager ===

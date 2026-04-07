@@ -6,8 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from termplus.core.sync.conflict_resolver import ConflictResolver, ConflictStrategy
-from termplus.core.sync.sync_state import SyncState
+from rlqshell.core.sync.conflict_resolver import ConflictResolver, ConflictStrategy
+from rlqshell.core.sync.sync_state import SyncState
 
 
 # === ConflictResolver ===
