@@ -67,13 +67,20 @@ class KnownHostsView(QWidget):
             ["Hostname", "Port", "Key Type", "Fingerprint", ""]
         )
         header = self._table.horizontalHeader()
+        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
         header.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
         header.setSectionResizeMode(4, QHeaderView.ResizeMode.Fixed)
+        self._table.setColumnWidth(2, 140)
         self._table.setColumnWidth(4, 90)
         self._table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self._table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self._table.verticalHeader().setVisible(False)
-        self._table.verticalHeader().setDefaultSectionSize(48)
+        self._table.verticalHeader().setDefaultSectionSize(56)
+        # Defeat the global `QTableWidget::item { padding: 6px 12px }` rule
+        # which otherwise eats vertical space inside cells and clips cell widgets.
+        self._table.setStyleSheet(
+            "QTableWidget::item { padding: 0px 12px; }"
+        )
         layout.addWidget(self._table)
 
         # Empty state
@@ -99,6 +106,9 @@ class KnownHostsView(QWidget):
         self._table.setRowCount(len(entries))
 
         for row, entry in enumerate(entries):
+            # Force the row height per-row — setDefaultSectionSize can be
+            # unreliable when the verticalHeader is hidden.
+            self._table.setRowHeight(row, 56)
             self._table.setItem(row, 0, QTableWidgetItem(entry.get("hostname", "")))
             self._table.setItem(row, 1, QTableWidgetItem(str(entry.get("port", 22))))
             self._table.setItem(row, 2, QTableWidgetItem(entry.get("key_type", "")))
@@ -108,13 +118,32 @@ class KnownHostsView(QWidget):
                 fp = fp[:40] + "..."
             self._table.setItem(row, 3, QTableWidgetItem(fp))
 
-            # Delete button
-            del_btn = QPushButton("Delete")
-            del_btn.setProperty("cssClass", "danger")
-            del_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            # Delete button — wrapped + explicit inline style so it doesn't
+            # inherit the global QPushButton min-height/padding (which would
+            # otherwise overflow the row and look like a pressed cell).
             entry_id = entry.get("id", 0)
+            del_btn = QPushButton("Delete")
+            del_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            del_btn.setFixedSize(64, 26)
+            del_btn.setStyleSheet(
+                f"QPushButton {{ "
+                f"  background-color: {Colors.DANGER}; color: #ffffff; "
+                f"  border: none; border-radius: 6px; "
+                f"  padding: 0; min-height: 0; "
+                f"  font-size: 11px; font-weight: 600; "
+                f"}}"
+                f"QPushButton:hover {{ background-color: {Colors.DANGER}; }}"
+            )
             del_btn.clicked.connect(lambda checked=False, eid=entry_id: self._delete(eid))
-            self._table.setCellWidget(row, 4, del_btn)
+
+            cell_wrapper = QWidget()
+            cell_wrapper.setStyleSheet("background: transparent;")
+            wrap_layout = QHBoxLayout(cell_wrapper)
+            wrap_layout.setContentsMargins(0, 0, 12, 0)
+            wrap_layout.setSpacing(0)
+            wrap_layout.addStretch()
+            wrap_layout.addWidget(del_btn, 0, Qt.AlignmentFlag.AlignVCenter)
+            self._table.setCellWidget(row, 4, cell_wrapper)
 
     def _delete(self, entry_id: int) -> None:
         reply = QMessageBox.question(
