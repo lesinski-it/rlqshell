@@ -202,11 +202,19 @@ class MainWindow(QMainWindow):
 
     def apply_appearance(self, config: ConfigManager) -> None:
         """Apply appearance settings (UI font, font size, window opacity)."""
-        from rlqshell.ui.themes.theme_manager import ThemeManager
+        from rlqshell.ui.themes.theme_manager import ThemeManager, resolve_theme_setting
 
         app = QApplication.instance()
         if app:
-            theme_name = config.get("appearance.theme", "dark")
+            theme_name = resolve_theme_setting(config.get("appearance.theme", "auto"))
+            # Re-apply palette before reloading the QSS so the template
+            # placeholders pick up dark/light variant for the active palette.
+            # Inline-styled widgets created earlier keep their old colors
+            # until restart — see the restart hint in AppearanceSettings.
+            Colors.apply_palette(
+                config.get("appearance.palette", "amber"),
+                theme=theme_name,
+            )
             ui_font = config.get("appearance.ui_font", "Inter")
             ui_font_size = config.get("appearance.ui_font_size", 13)
             ThemeManager().apply_theme(app, theme_name, ui_font=ui_font, ui_font_size=ui_font_size)
@@ -218,6 +226,23 @@ class MainWindow(QMainWindow):
     def set_config(self, config: ConfigManager) -> None:
         """Set the config manager for persistent settings."""
         self._config = config
+        # Follow OS color scheme changes when appearance.theme is "auto".
+        from PySide6.QtGui import QGuiApplication
+
+        hints = QGuiApplication.styleHints()
+        if hints is not None:
+            try:
+                hints.colorSchemeChanged.connect(self._on_system_color_scheme_changed)
+            except Exception:  # noqa: BLE001 — older Qt may lack this signal
+                logger.debug("colorSchemeChanged signal unavailable", exc_info=True)
+
+    def _on_system_color_scheme_changed(self, _scheme) -> None:
+        """Re-apply appearance when OS theme flips, but only if user is on auto."""
+        config = getattr(self, "_config", None)
+        if config is None:
+            return
+        if config.get("appearance.theme", "auto") == "auto":
+            self.apply_appearance(config)
 
     def set_cleanup_callback(self, callback) -> None:
         """Register a callback to run on window close for resource cleanup."""

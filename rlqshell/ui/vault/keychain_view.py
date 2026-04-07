@@ -38,14 +38,14 @@ class _KeyListItem(QWidget):
         super().__init__(parent)
         self._key_id = key.id or 0
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setFixedHeight(56)
+        self.setFixedHeight(68)
         self.setStyleSheet(
             f"_KeyListItem {{ background: transparent; border-radius: 6px; }}"
             f"_KeyListItem:hover {{ background-color: {Colors.BG_SURFACE}; }}"
         )
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(16, 8, 16, 8)
+        layout.setContentsMargins(16, 10, 16, 10)
         layout.setSpacing(12)
 
         # Key type badge
@@ -61,7 +61,7 @@ class _KeyListItem(QWidget):
 
         # Label + fingerprint
         info_layout = QVBoxLayout()
-        info_layout.setSpacing(2)
+        info_layout.setSpacing(5)
         info_layout.setContentsMargins(0, 0, 0, 0)
 
         label_text = key.label or "Unnamed key"
@@ -262,11 +262,18 @@ class KeychainView(QWidget):
 
     def refresh(self) -> None:
         """Reload the key list from the database."""
-        # Clear existing items
-        while self._list_layout.count():
-            child = self._list_layout.takeAt(0)
-            if child.widget():
-                child.widget().deleteLater()
+        # Clear existing items, but keep the persistent empty-state widget alive
+        # (deleteLater on it would dangle the C++ object on the next refresh).
+        for i in reversed(range(self._list_layout.count())):
+            widget = self._list_layout.itemAt(i).widget()
+            if widget is None:
+                continue
+            if widget is self._empty_state:
+                self._list_layout.takeAt(i)
+                widget.setParent(None)
+            else:
+                self._list_layout.takeAt(i)
+                widget.deleteLater()
 
         keys = self._keychain.list_keys()
 
@@ -276,7 +283,6 @@ class KeychainView(QWidget):
             return
 
         self._empty_state.hide()
-        self._empty_state.setParent(None)
 
         for key in keys:
             item = _KeyListItem(key)

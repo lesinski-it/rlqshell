@@ -12,6 +12,33 @@ from rlqshell.app.constants import THEMES_DIR
 logger = logging.getLogger(__name__)
 
 
+def resolve_theme_setting(theme_setting: str) -> str:
+    """Resolve a configured theme value to a concrete 'dark' or 'light'.
+
+    'auto' is mapped to the current system color scheme via
+    QGuiApplication.styleHints().colorScheme(). If the scheme cannot be
+    determined (older Qt, headless test, unknown), falls back to 'dark'.
+    Any other input is returned as-is so callers can pass through 'dark'
+    or 'light' directly.
+    """
+    if theme_setting != "auto":
+        return theme_setting
+    try:
+        from PySide6.QtCore import Qt
+        from PySide6.QtGui import QGuiApplication
+
+        hints = QGuiApplication.styleHints()
+        if hints is not None:
+            scheme = hints.colorScheme()
+            if scheme == Qt.ColorScheme.Light:
+                return "light"
+            if scheme == Qt.ColorScheme.Dark:
+                return "dark"
+    except Exception:  # noqa: BLE001 — best-effort detection
+        logger.debug("Could not detect system color scheme", exc_info=True)
+    return "dark"
+
+
 class ThemeManager:
     """Loads and applies QSS themes to the application."""
 
@@ -32,8 +59,16 @@ class ThemeManager:
         ]
 
     def load_theme(self, theme_name: str) -> str:
-        """Load a QSS file and return its content."""
+        """Load a QSS file and return its content.
+
+        The QSS files are templates with palette placeholders — light/dark
+        variants share the same template, only the substituted palette
+        differs. If `{theme_name}.qss` doesn't exist, fall back to dark.qss
+        which acts as the canonical template.
+        """
         qss_path = THEMES_DIR / f"{theme_name}.qss"
+        if not qss_path.exists():
+            qss_path = THEMES_DIR / "dark.qss"
         if not qss_path.exists():
             logger.warning("Theme file not found: %s", qss_path)
             return ""

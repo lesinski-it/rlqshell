@@ -68,11 +68,19 @@ class Colors:
     ERROR = ""
 
     @classmethod
-    def apply_palette(cls, name: str) -> None:
-        """Apply a named palette by overwriting class attributes in place."""
-        from rlqshell.ui.themes.palettes import DEFAULT_PALETTE, PALETTES
+    def apply_palette(cls, name: str, theme: str = "dark") -> None:
+        """Apply a named palette by overwriting class attributes in place.
 
-        palette = PALETTES.get(name) or PALETTES[DEFAULT_PALETTE]
+        `theme` selects between the dark and light variants of the palette.
+        """
+        from rlqshell.ui.themes.palettes import (
+            DEFAULT_PALETTE,
+            PALETTES,
+            PALETTES_LIGHT,
+        )
+
+        palette_set = PALETTES_LIGHT if theme == "light" else PALETTES
+        palette = palette_set.get(name) or palette_set[DEFAULT_PALETTE]
         for key, value in palette.items():
             setattr(cls, key, value)
         # Status colors are derived from the semantic palette
@@ -85,7 +93,7 @@ class Colors:
 # Apply the default palette at module import so widgets can read Colors.*
 # even before main() runs (e.g. during tests). main() will overwrite this
 # with the user-configured palette.
-Colors.apply_palette("cyan")
+Colors.apply_palette("amber")
 
 # SSH defaults
 DEFAULT_SSH_PORT = 22

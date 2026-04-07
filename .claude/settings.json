@@ -31,7 +31,8 @@
       "Bash(\"C:/Users/ravczy/.cargo/bin/rustc.exe\" --version)",
       "Bash(RUSTC=\"C:/Users/ravczy/.cargo/bin/rustc.exe\" CARGO=\"C:/Users/ravczy/.cargo/bin/cargo.exe\" PATH=\"C:/Users/ravczy/.cargo/bin:$PATH\" python -m pip install aardwolf --no-cache-dir --no-build-isolation)",
       "Bash(.venv313/Scripts/pyinstaller.exe termplus.spec --clean)",
-      "Bash(.venv313/Scripts/python.exe -c \":*)"
+      "Bash(.venv313/Scripts/python.exe -c \":*)",
+      "Bash(python -c ':*)"
     ]
   }
 }

@@ -39,14 +39,14 @@ class _SnippetItem(QWidget):
         super().__init__(parent)
         self._snippet_id = snippet.id or 0
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setFixedHeight(64)
+        self.setFixedHeight(76)
         self.setStyleSheet(
             f"_SnippetItem {{ background: transparent; border-radius: 6px; }}"
             f"_SnippetItem:hover {{ background-color: {Colors.BG_SURFACE}; }}"
         )
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(12, 8, 12, 8)
+        layout.setContentsMargins(12, 10, 12, 10)
         layout.setSpacing(8)
 
         # Drag handle
@@ -70,7 +70,7 @@ class _SnippetItem(QWidget):
         # Text area
         text_col = QVBoxLayout()
         text_col.setContentsMargins(0, 0, 0, 0)
-        text_col.setSpacing(2)
+        text_col.setSpacing(6)
 
         # Name row
         name_row = QHBoxLayout()
@@ -240,6 +240,7 @@ class SnippetListView(QWidget):
             title="No snippets yet",
             description="Create a snippet to save frequently used commands.",
             action_text="+ New Snippet",
+            icon_text="\U0001f4dd",  # 📝
         )
         self._empty.action_clicked.connect(self._on_new_snippet)
         self._empty.setVisible(False)

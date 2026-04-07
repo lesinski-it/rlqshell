@@ -53,10 +53,10 @@ class AppearanceSettings(QWidget):
         )
         form.addRow(self._make_label("Palette"), self._palette)
 
-        # Theme
+        # Theme — "auto" follows the OS color scheme
         self._theme = QComboBox()
-        self._theme.addItems(["dark"])
-        self._theme.setCurrentText(config.get("appearance.theme", "dark"))
+        self._theme.addItems(["auto", "dark", "light"])
+        self._theme.setCurrentText(config.get("appearance.theme", "auto"))
         self._theme.currentTextChanged.connect(
             lambda v: self._save("appearance.theme", v)
         )
@@ -91,9 +91,9 @@ class AppearanceSettings(QWidget):
 
         layout.addLayout(form)
 
-        # Restart hint — palette change does not hot-reload
+        # Restart hint — inline-styled widgets keep their old colors until restart
         restart_hint = QLabel(
-            "⚠ Restart required for palette changes to take effect."
+            "⚠ Restart recommended for palette/theme changes to fully apply."
         )
         restart_hint.setStyleSheet(
             f"font-size: 12px; color: {Colors.WARNING}; background: transparent; "

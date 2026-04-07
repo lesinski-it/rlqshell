@@ -79,6 +79,8 @@ a = Analysis(
     binaries=extra_binaries + pyside6_binaries + shiboken6_binaries,
     datas=[
         ('rlqshell/resources', 'rlqshell/resources'),
+        ('rlqshell/ui/themes/dark.qss', 'rlqshell/ui/themes'),
+        ('rlqshell/ui/themes/terminal_schemes.json', 'rlqshell/ui/themes'),
     ] + extra_datas,
     hiddenimports=hiddenimports,
     hookspath=[],
@@ -113,5 +115,5 @@ exe = EXE(
     upx_exclude=[],
     runtime_tmpdir=None,
     console=False,
-    icon=None,  # TODO: add rlqshell/resources/images/app_icon.ico
+    icon='rlqshell/resources/images/app_icon.ico',
 )

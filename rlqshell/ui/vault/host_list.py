@@ -229,7 +229,7 @@ class HostListItem(QWidget):
         super().__init__(parent)
         self._host_id = host.id or 0
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setFixedHeight(64)
+        self.setFixedHeight(76)
         self.setStyleSheet(
             f"HostListItem {{ "
             f"  background: transparent; "
@@ -243,7 +243,7 @@ class HostListItem(QWidget):
         )
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(10, 8, 12, 8)
+        layout.setContentsMargins(10, 10, 12, 10)
         layout.setSpacing(10)
 
         # Drag handle
@@ -270,7 +270,7 @@ class HostListItem(QWidget):
         # Host info — two rows
         info_layout = QVBoxLayout()
         info_layout.setContentsMargins(0, 0, 0, 0)
-        info_layout.setSpacing(3)
+        info_layout.setSpacing(6)
 
         # Row 1: name (left) + status badge (right)
         row1 = QHBoxLayout()
@@ -748,6 +748,7 @@ class HostListWidget(QWidget):
             title="No hosts yet",
             description="Create your first host to get started.",
             action_text="+ New Host",
+            icon_text="\U0001f5a5\ufe0f",  # 🖥️
         )
         self._empty_state.action_clicked.connect(self._on_new_host)
         self._empty_state.setVisible(False)

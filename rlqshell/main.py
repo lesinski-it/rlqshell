@@ -12,55 +12,76 @@ logger = logging.getLogger(__name__)
 
 def main() -> None:
     """Launch the RLQShell application."""
-    # Only the bare minimum before showing the splash: QApplication must exist first
+    # Bare-minimum imports so the splash can appear as soon as humanly possible.
+    # RLQShellApplication.__init__ is intentionally lean — fonts, icon and config
+    # are loaded AFTER splash.show() so the user sees the loading window instantly.
+    from PySide6.QtWidgets import QApplication
+
     from rlqshell.app.application import RLQShellApplication
     from rlqshell.app.constants import APP_VERSION
     from rlqshell.ui.splash_screen import SplashScreen
-    from PySide6.QtWidgets import QApplication
 
     app = RLQShellApplication(sys.argv)
-
-    _SPLASH_MIN_SECS = 5.0
 
     splash = SplashScreen(APP_VERSION)
     splash.show()
     splash.raise_()
+    splash.update_progress(2, "Starting RLQShell\u2026")
     QApplication.processEvents()
     _splash_shown_at = time.monotonic()
 
-    # Now it's safe to do everything else
+    _SPLASH_MIN_SECS = 1.5
+
+    # Window icon — fast, but still after splash so we don't delay it.
+    app.load_window_icon()
+
+    # Fonts — disk I/O for ~7 files. Report per-font progress so the bar moves.
+    splash.update_progress(4, "Loading fonts\u2026")
+
+    def _font_progress(index: int, total: int, name: str) -> None:
+        # Spread font loading across 4–14% of the bar.
+        pct = 4 + int(10 * (index + 1) / max(total, 1))
+        splash.update_progress(pct, f"Loading {name}\u2026")
+
+    app.load_fonts(progress_cb=_font_progress)
+
+    splash.update_progress(15, "Initializing logging\u2026")
     from rlqshell.utils.logger import setup_logging
     setup_logging(app.config.log_dir)
 
     logger.info("Starting RLQShell…")
 
-    splash.update_progress(5, "Loading theme…")
+    splash.update_progress(20, "Loading theme\u2026")
 
     # Apply color palette BEFORE any widget is created — inline stylesheets
     # in widgets read Colors.* at __init__ time, so the palette must already
     # be active. Restart is required to change palette at runtime.
     from rlqshell.app.constants import Colors
 
-    Colors.apply_palette(app.config.get("appearance.palette", "cyan"))
-
     # Apply theme
-    from rlqshell.ui.themes.theme_manager import ThemeManager
+    from rlqshell.ui.themes.theme_manager import ThemeManager, resolve_theme_setting
+
+    theme_name = resolve_theme_setting(app.config.get("appearance.theme", "auto"))
+    Colors.apply_palette(
+        app.config.get("appearance.palette", "amber"),
+        theme=theme_name,
+    )
 
     theme_mgr = ThemeManager()
-    theme_name = app.config.get("appearance.theme", "dark")
     ui_font = app.config.get("appearance.ui_font", "Inter")
     ui_font_size = app.config.get("appearance.ui_font_size", 13)
     theme_mgr.apply_theme(app, theme_name, ui_font=ui_font, ui_font_size=ui_font_size)
 
     # Install qasync event loop BEFORE creating any widgets that need async
-    splash.update_progress(15, "Initializing event loop…")
+    splash.update_progress(28, "Initializing event loop\u2026")
     import qasync
 
     loop = qasync.QEventLoop(app)
     asyncio.set_event_loop(loop)
 
-    # Initialize database and vault
-    splash.update_progress(30, "Loading modules…")
+    # Core modules — split into two import groups with progress between them
+    # so the bar keeps moving during the heavy import phase.
+    splash.update_progress(35, "Loading core modules\u2026")
     from rlqshell.core.connection_pool import ConnectionPool
     from rlqshell.core.credential_store import CredentialStore
     from rlqshell.core.database import Database
@@ -73,6 +94,8 @@ def main() -> None:
     from rlqshell.core.sync.sync_engine import SyncEngine
     from rlqshell.core.sync.sync_state import SyncState
     from rlqshell.core.vault import Vault
+
+    splash.update_progress(50, "Loading UI modules\u2026")
     from rlqshell.ui.command_palette import CommandPalette, PaletteItem
     from rlqshell.ui.connections.connections_page import ConnectionsPage
     from rlqshell.ui.port_forward.port_forward_page import PortForwardPage
@@ -81,22 +104,36 @@ def main() -> None:
     from rlqshell.ui.top_bar import TopBar
     from rlqshell.ui.vault.vault_page import VaultPage
 
-    splash.update_progress(55, "Opening database…")
+    splash.update_progress(62, "Opening database\u2026")
     db = Database(app.config.db_path)
 
-    splash.update_progress(65, "Unlocking vault…")
+    splash.update_progress(74, "Unlocking vault\u2026")
     vault = Vault(db)
     vault.initialize()
 
+    splash.update_progress(85, "Initializing credentials\u2026")
     credential_store = CredentialStore(db, app.config.vault_key_path)
 
-    # Wait until minimum display time has elapsed, then close splash
-    splash.update_progress(75, "Ready…")
+    # Smoothly animate 85% → 100% during the minimum-display window so the bar
+    # actually looks like it's filling up instead of freezing on the last step.
     _remaining = _SPLASH_MIN_SECS - (time.monotonic() - _splash_shown_at)
     if _remaining > 0:
-        _deadline = time.monotonic() + _remaining
-        while time.monotonic() < _deadline:
-            QApplication.processEvents()
+        _start = time.monotonic()
+        _last_pct = 85
+        while True:
+            _elapsed = time.monotonic() - _start
+            if _elapsed >= _remaining:
+                break
+            _pct = 85 + int(15 * _elapsed / _remaining)
+            if _pct > _last_pct:
+                splash.update_progress(_pct, "Almost ready\u2026")
+                _last_pct = _pct
+            else:
+                QApplication.processEvents()
+            time.sleep(0.016)  # ~60 fps
+
+    splash.update_progress(100, "Ready")
+    QApplication.processEvents()
     splash.close()
 
     # Master password dialog — unlock or set new password

@@ -6,6 +6,7 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QLabel,
     QPushButton,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
@@ -53,8 +54,14 @@ class EmptyState(QWidget):
             desc_label = QLabel(description)
             desc_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
             desc_label.setWordWrap(True)
+            # heightForWidth so wrapped lines aren't clipped by the parent layout
+            sp = desc_label.sizePolicy()
+            sp.setHeightForWidth(True)
+            sp.setVerticalPolicy(QSizePolicy.Policy.MinimumExpanding)
+            desc_label.setSizePolicy(sp)
             desc_label.setStyleSheet(
-                f"font-size: 13px; color: {Colors.TEXT_SECONDARY}; background: transparent;"
+                f"font-size: 13px; color: {Colors.TEXT_SECONDARY}; "
+                f"background: transparent; line-height: 150%;"
             )
             layout.addWidget(desc_label)
 

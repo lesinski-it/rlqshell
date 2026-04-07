@@ -35,14 +35,14 @@ class _IdentityListItem(QWidget):
         super().__init__(parent)
         self._identity_id = identity.id or 0
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setFixedHeight(56)
+        self.setFixedHeight(68)
         self.setStyleSheet(
             f"_IdentityListItem {{ background: transparent; border-radius: 6px; }}"
             f"_IdentityListItem:hover {{ background-color: {Colors.BG_SURFACE}; }}"
         )
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(16, 8, 16, 8)
+        layout.setContentsMargins(16, 10, 16, 10)
         layout.setSpacing(12)
 
         # Auth type badge
@@ -58,7 +58,7 @@ class _IdentityListItem(QWidget):
 
         # Label + username
         info_layout = QVBoxLayout()
-        info_layout.setSpacing(2)
+        info_layout.setSpacing(5)
         info_layout.setContentsMargins(0, 0, 0, 0)
 
         label_text = identity.label or "Unnamed"
@@ -167,6 +167,7 @@ class IdentitiesView(QWidget):
             title="No Identities",
             description="Create identities to store usernames and credentials for your hosts.",
             action_text="New Identity",
+            icon_text="\U0001f464",  # 👤
         )
         self._empty_state.action_clicked.connect(self._on_new_identity)
 
@@ -174,10 +175,18 @@ class IdentitiesView(QWidget):
 
     def refresh(self) -> None:
         """Reload the identity list from the database."""
-        while self._list_layout.count():
-            child = self._list_layout.takeAt(0)
-            if child.widget():
-                child.widget().deleteLater()
+        # Clear existing items, but keep the persistent empty-state widget alive
+        # (deleteLater on it would dangle the C++ object on the next refresh).
+        for i in reversed(range(self._list_layout.count())):
+            widget = self._list_layout.itemAt(i).widget()
+            if widget is None:
+                continue
+            if widget is self._empty_state:
+                self._list_layout.takeAt(i)
+                widget.setParent(None)
+            else:
+                self._list_layout.takeAt(i)
+                widget.deleteLater()
 
         identities = self._store.list_identities()
 
@@ -187,7 +196,6 @@ class IdentitiesView(QWidget):
             return
 
         self._empty_state.hide()
-        self._empty_state.setParent(None)
 
         for identity in identities:
             item = _IdentityListItem(identity)

@@ -5,6 +5,9 @@ chosen at startup via Colors.apply_palette() (see rlqshell.app.constants) and
 is then used both by inline widget stylesheets (Colors.* attributes) and by
 the QSS template renderer (rlqshell.ui.themes.theme_manager).
 
+Two palette sets are provided per name: PALETTES (dark) and PALETTES_LIGHT.
+The active set is selected by the `theme` parameter on apply_palette().
+
 Changing palette in settings requires a restart — there is no hot-swap.
 """
 
@@ -89,7 +92,86 @@ PALETTES: dict[str, dict[str, str]] = {
     },
 }
 
-DEFAULT_PALETTE = "cyan"
+PALETTES_LIGHT: dict[str, dict[str, str]] = {
+    "cyan": {
+        "BG_PRIMARY": "#ffffff",
+        "BG_SURFACE": "#f1f5f9",
+        "BG_DARKER": "#e2e8f0",
+        "BG_HOVER": "#e2e8f0",
+        "BG_ACTIVE": "#cbd5e1",
+        "ACCENT": "#0891b2",
+        "ACCENT_HOVER": "#0e7490",
+        "ACCENT_LIGHT": "#67e8f9",
+        "TEXT_PRIMARY": "#0f172a",
+        "TEXT_SECONDARY": "#475569",
+        "TEXT_MUTED": "#94a3b8",
+        "BORDER": "#cbd5e1",
+        "BORDER_FOCUS": "#0891b2",
+        "SUCCESS": "#16a34a",
+        "WARNING": "#d97706",
+        "DANGER": "#dc2626",
+        "INFO": "#2563eb",
+    },
+    "emerald": {
+        "BG_PRIMARY": "#ffffff",
+        "BG_SURFACE": "#f0fdf4",
+        "BG_DARKER": "#dcfce7",
+        "BG_HOVER": "#dcfce7",
+        "BG_ACTIVE": "#bbf7d0",
+        "ACCENT": "#059669",
+        "ACCENT_HOVER": "#047857",
+        "ACCENT_LIGHT": "#6ee7b7",
+        "TEXT_PRIMARY": "#0f172a",
+        "TEXT_SECONDARY": "#475569",
+        "TEXT_MUTED": "#94a3b8",
+        "BORDER": "#cbd5e1",
+        "BORDER_FOCUS": "#059669",
+        "SUCCESS": "#16a34a",
+        "WARNING": "#d97706",
+        "DANGER": "#dc2626",
+        "INFO": "#2563eb",
+    },
+    "amber": {
+        "BG_PRIMARY": "#ffffff",
+        "BG_SURFACE": "#fffbeb",
+        "BG_DARKER": "#fef3c7",
+        "BG_HOVER": "#fef3c7",
+        "BG_ACTIVE": "#fde68a",
+        "ACCENT": "#ea580c",
+        "ACCENT_HOVER": "#c2410c",
+        "ACCENT_LIGHT": "#fdba74",
+        "TEXT_PRIMARY": "#1c1917",
+        "TEXT_SECONDARY": "#57534e",
+        "TEXT_MUTED": "#a8a29e",
+        "BORDER": "#e7e5e4",
+        "BORDER_FOCUS": "#ea580c",
+        "SUCCESS": "#16a34a",
+        "WARNING": "#d97706",
+        "DANGER": "#dc2626",
+        "INFO": "#2563eb",
+    },
+    "azure": {
+        "BG_PRIMARY": "#ffffff",
+        "BG_SURFACE": "#f1f5f9",
+        "BG_DARKER": "#e2e8f0",
+        "BG_HOVER": "#e2e8f0",
+        "BG_ACTIVE": "#cbd5e1",
+        "ACCENT": "#2563eb",
+        "ACCENT_HOVER": "#1d4ed8",
+        "ACCENT_LIGHT": "#93c5fd",
+        "TEXT_PRIMARY": "#0f172a",
+        "TEXT_SECONDARY": "#475569",
+        "TEXT_MUTED": "#94a3b8",
+        "BORDER": "#cbd5e1",
+        "BORDER_FOCUS": "#2563eb",
+        "SUCCESS": "#16a34a",
+        "WARNING": "#d97706",
+        "DANGER": "#dc2626",
+        "INFO": "#0284c7",
+    },
+}
+
+DEFAULT_PALETTE = "amber"
 
 PALETTE_KEYS: tuple[str, ...] = (
     "BG_PRIMARY", "BG_SURFACE", "BG_DARKER", "BG_HOVER", "BG_ACTIVE",

@@ -10,7 +10,8 @@
         "bell": "visual"
     },
     "appearance": {
-        "theme": "dark",
+        "theme": "auto",
+        "palette": "amber",
         "terminal_scheme": "rlqshell-default",
         "ui_font": "Inter",
         "opacity": 100
