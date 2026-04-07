@@ -34,6 +34,11 @@ jobs:
 
       - name: Zainstaluj zaleznosci Python
         shell: powershell
+        env:
+          # aardwolf zawiera rozszerzenie Rust z PyO3, ktore na dzien dzisiejszy
+          # maksymalnie wspiera Python 3.13. Na runnerach z 3.14+ wymuszamy
+          # build pod stable ABI, zeby uniknac bledu kompilacji.
+          PYO3_USE_ABI3_FORWARD_COMPATIBILITY: "1"
         run: |
           pip install -r requirements.txt
           pip install pyinstaller
