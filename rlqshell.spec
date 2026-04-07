@@ -113,5 +113,5 @@ exe = EXE(
     upx_exclude=[],
     runtime_tmpdir=None,
     console=False,
-    icon='rlqshell/resources/images/app_icon.ico',
+    icon=None,  # TODO: add rlqshell/resources/images/app_icon.ico
 )
