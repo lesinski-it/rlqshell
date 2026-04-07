@@ -1,0 +1,140 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+    RLQShell MSI installer definition (WiX v6, per-machine)
+
+    Build-time variables (pass with `-d Name=Value`):
+      Version        e.g. 0.1.0
+      SourceExe      absolute path to dist/RLQShell.exe
+      IconFile       absolute path to rlqshell/resources/images/app_icon.ico
+      LicenseRtf     absolute path to installer/License.rtf
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
+
+  <Package Name="RLQShell"
+           Manufacturer="RLQShell Contributors"
+           Version="$(var.Version)"
+           UpgradeCode="3ADAE43B-5083-4B8A-8844-5A51E7AD6174"
+           Scope="perMachine"
+           Compressed="yes"
+           Codepage="1250"
+           Language="1045"
+           InstallerVersion="500">
+
+    <SummaryInformation Description="RLQShell – modern SSH client with private-cloud sync"
+                        Manufacturer="RLQShell Contributors" />
+
+    <!-- Upgrades: any older version is replaced cleanly -->
+    <MajorUpgrade DowngradeErrorMessage="Nowsza wersja RLQShell jest już zainstalowana. Odinstaluj ją najpierw, aby kontynuować." />
+
+    <!-- Everything goes in a single embedded cab -->
+    <MediaTemplate EmbedCab="yes" />
+
+    <!-- Icon used in Add/Remove Programs and shortcuts -->
+    <Icon Id="RLQShell.ico" SourceFile="$(var.IconFile)" />
+    <Property Id="ARPPRODUCTICON" Value="RLQShell.ico" />
+    <Property Id="ARPHELPLINK" Value="https://update.lesinski.it/rlqshell/" />
+    <Property Id="ARPURLINFOABOUT" Value="https://update.lesinski.it/rlqshell/" />
+    <Property Id="ARPNOMODIFY" Value="1" />
+
+    <!-- Install into %ProgramFiles%\RLQShell -->
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="RLQShell" />
+    </StandardDirectory>
+
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Directory Id="ApplicationProgramsFolder" Name="RLQShell" />
+    </StandardDirectory>
+
+    <StandardDirectory Id="DesktopFolder" />
+
+    <!--
+        Components
+
+        MainExecutable   - always installed (core feature)
+        StartMenuShortcut - optional feature, user toggles checkbox
+        DesktopShortcut  - optional feature, user toggles checkbox
+    -->
+
+    <Component Id="MainExecutable"
+               Directory="INSTALLFOLDER"
+               Guid="7A2E9C4D-1B56-4F8E-9A3B-C5D7E8F9A012">
+      <File Id="RLQShellExe"
+            Name="RLQShell.exe"
+            Source="$(var.SourceExe)"
+            KeyPath="yes" />
+    </Component>
+
+    <Component Id="StartMenuShortcut"
+               Directory="ApplicationProgramsFolder"
+               Guid="F1B2A3C4-D5E6-4789-A0B1-C2D3E4F50617">
+      <Shortcut Id="ApplicationStartMenuShortcut"
+                Name="RLQShell"
+                Description="Modern SSH client with private-cloud sync"
+                Target="[INSTALLFOLDER]RLQShell.exe"
+                WorkingDirectory="INSTALLFOLDER"
+                Icon="RLQShell.ico" />
+      <RemoveFolder Id="CleanUpApplicationProgramsFolder"
+                    Directory="ApplicationProgramsFolder"
+                    On="uninstall" />
+      <RegistryValue Root="HKCU"
+                     Key="Software\RLQShell\Installer"
+                     Name="StartMenuShortcut"
+                     Type="integer"
+                     Value="1"
+                     KeyPath="yes" />
+    </Component>
+
+    <Component Id="DesktopShortcut"
+               Directory="DesktopFolder"
+               Guid="9E8D7C6B-5A49-4382-B716-0F1E2D3C4B5A">
+      <Shortcut Id="ApplicationDesktopShortcut"
+                Name="RLQShell"
+                Description="Modern SSH client with private-cloud sync"
+                Target="[INSTALLFOLDER]RLQShell.exe"
+                WorkingDirectory="INSTALLFOLDER"
+                Icon="RLQShell.ico" />
+      <RegistryValue Root="HKCU"
+                     Key="Software\RLQShell\Installer"
+                     Name="DesktopShortcut"
+                     Type="integer"
+                     Value="1"
+                     KeyPath="yes" />
+    </Component>
+
+    <!--
+        Feature tree
+
+        Core is mandatory (AllowAbsent="no"). The two shortcut features default
+        to "installed locally" but can be unchecked in the WixUI_FeatureTree
+        dialog.
+    -->
+    <Feature Id="Core"
+             Title="RLQShell (wymagane)"
+             Description="Aplikacja główna RLQShell."
+             Level="1"
+             AllowAbsent="no"
+             ConfigurableDirectory="INSTALLFOLDER">
+      <ComponentRef Id="MainExecutable" />
+
+      <Feature Id="StartMenuShortcutFeature"
+               Title="Skrót w menu Start"
+               Description="Dodaje skrót do RLQShell w menu Start."
+               Level="1">
+        <ComponentRef Id="StartMenuShortcut" />
+      </Feature>
+
+      <Feature Id="DesktopShortcutFeature"
+               Title="Skrót na pulpicie"
+               Description="Dodaje skrót do RLQShell na pulpicie."
+               Level="1">
+        <ComponentRef Id="DesktopShortcut" />
+      </Feature>
+    </Feature>
+
+    <!-- UI with feature tree checkboxes -->
+    <ui:WixUI Id="WixUI_FeatureTree" />
+    <WixVariable Id="WixUILicenseRtf" Value="$(var.LicenseRtf)" />
+
+  </Package>
+</Wix>

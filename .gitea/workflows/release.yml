@@ -1,0 +1,204 @@
+name: Build & Deploy RLQShell
+
+# Trigger: git tag v0.1.0 && git push --tags
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    runs-on: self-hosted
+
+    steps:
+      - name: Checkout kodu
+        uses: actions/checkout@v4
+
+      - name: Zapisz wersje do pliku
+        shell: powershell
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $version = $tag.TrimStart('v')
+          Write-Output "Building version: $version"
+          $version | Out-File -FilePath version_tag.txt -NoNewline -Encoding ascii
+
+      - name: Zaktualizuj wersje w pyproject.toml
+        shell: powershell
+        run: |
+          $v = (Get-Content version_tag.txt -Raw).Trim()
+          $py = Get-Content pyproject.toml -Raw
+          $py = $py -replace '(?m)^(\s*version\s*=\s*")[^"]+(")', "`${1}$v`${2}"
+          Set-Content pyproject.toml -Value $py -NoNewline -Encoding utf8
+          Write-Output "Patched pyproject.toml version to $v"
+          Select-String -Path pyproject.toml -Pattern '^\s*version\s*=' | Select-Object -First 1
+
+      - name: Zainstaluj zaleznosci Python
+        shell: powershell
+        run: |
+          pip install -r requirements.txt
+          pip install pyinstaller
+          python -c "import PySide6; print('PySide6 OK:', PySide6.__file__)"
+
+      - name: Zbuduj EXE (PyInstaller)
+        shell: powershell
+        run: pyinstaller --noconfirm --clean rlqshell.spec
+
+      - name: Bootstrap .NET SDK i WiX 6
+        shell: powershell
+        run: |
+          # .NET SDK (per-user, bez UAC) — wymagany tylko do budowania MSI
+          $dotnetDir = "$env:USERPROFILE\.dotnet"
+          if (-not (Get-Command dotnet -ErrorAction SilentlyContinue)) {
+            Write-Output "Installing .NET SDK 8.0..."
+            $installer = "$env:TEMP\dotnet-install.ps1"
+            Invoke-WebRequest -Uri "https://dot.net/v1/dotnet-install.ps1" -OutFile $installer -UseBasicParsing
+            & $installer -Channel 8.0 -InstallDir $dotnetDir
+          }
+          if (Test-Path $dotnetDir) {
+            $env:PATH = "$dotnetDir;$env:PATH"
+            $env:DOTNET_ROOT = $dotnetDir
+          }
+          $env:PATH = "$env:USERPROFILE\.dotnet\tools;$env:PATH"
+          Write-Output "dotnet version: $(dotnet --version)"
+
+          # WiX 6.0.2 — pin na v6, bo v7+ wymaga platnej licencji OSMF
+          $wixWanted = "6.0.2"
+          $wixInstalled = $null
+          try { $wixInstalled = (wix --version 2>$null) } catch { }
+          if (-not $wixInstalled -or ($wixInstalled -notmatch [regex]::Escape($wixWanted))) {
+            Write-Output "Installing WiX $wixWanted..."
+            dotnet tool uninstall -g wix 2>$null
+            dotnet tool install -g wix --version $wixWanted
+          }
+          Write-Output "WiX version: $(wix --version)"
+
+          # Extension UI (wymagane przez WixUI_FeatureTree)
+          $extList = (wix extension list -g) 2>&1 | Out-String
+          if ($extList -notmatch "WixToolset.UI.wixext") {
+            Write-Output "Installing WixToolset.UI.wixext $wixWanted..."
+            wix extension add -g "WixToolset.UI.wixext/$wixWanted"
+          }
+          wix extension list -g
+
+      - name: Zbuduj MSI (WiX)
+        shell: powershell
+        run: |
+          $v = (Get-Content version_tag.txt -Raw).Trim()
+          # PATH z poprzedniego kroku nie przechodzi — build-msi.ps1 sam dokleja .dotnet do PATH
+          pwsh -NoProfile -ExecutionPolicy Bypass -File installer/build-msi.ps1 -Version $v
+          if ($LASTEXITCODE -ne 0) { throw "build-msi.ps1 failed" }
+
+      - name: Oblicz SHA256 i generuj version.json
+        shell: powershell
+        run: |
+          $v = (Get-Content version_tag.txt -Raw).Trim()
+          $msiPath = "dist\RLQShell-$v-x64.msi"
+          $exePath = "dist\RLQShell.exe"
+          $exeHash = (Get-FileHash $exePath -Algorithm SHA256).Hash.ToLower()
+          $msiHash = (Get-FileHash $msiPath -Algorithm SHA256).Hash.ToLower()
+          $exeSize = [long](Get-Item $exePath).Length
+          $msiSize = [long](Get-Item $msiPath).Length
+          Write-Output "EXE SHA256: $exeHash ($exeSize bytes)"
+          Write-Output "MSI SHA256: $msiHash ($msiSize bytes)"
+          $baseUrl = "https://update.lesinski.it/rlqshell"
+          $json = @"
+          {
+            "schema_version": 1,
+            "version": "$v",
+            "release_date": "$(Get-Date -Format 'yyyy-MM-dd')",
+            "minimum_version": "0.1.0",
+            "release_notes": "Wersja $v",
+            "downloads": {
+              "msi": {
+                "url": "$baseUrl/releases/RLQShell-$v-x64.msi",
+                "sha256": "$msiHash",
+                "size_bytes": $msiSize
+              },
+              "exe": {
+                "url": "$baseUrl/releases/RLQShell-$v.exe",
+                "sha256": "$exeHash",
+                "size_bytes": $exeSize
+              }
+            },
+            "forced": false
+          }
+          "@
+          [System.IO.File]::WriteAllText("$PWD\dist\version.json", $json, [System.Text.UTF8Encoding]::new($false))
+          Write-Output "Generated dist\version.json"
+          Get-Content "dist\version.json"
+
+      - name: Generuj index.html
+        shell: powershell
+        run: |
+          $v = (Get-Content version_tag.txt -Raw).Trim()
+          $date = Get-Date -Format "yyyy-MM-dd"
+          $msiPath = "dist\RLQShell-$v-x64.msi"
+          $exePath = "dist\RLQShell.exe"
+          $exeHash = (Get-FileHash $exePath -Algorithm SHA256).Hash.ToLower()
+          $msiHash = (Get-FileHash $msiPath -Algorithm SHA256).Hash.ToLower()
+          $exeSizeMB = [math]::Round((Get-Item $exePath).Length / 1MB, 1)
+          $msiSizeMB = [math]::Round((Get-Item $msiPath).Length / 1MB, 1)
+          $html = @"
+          <!DOCTYPE html>
+          <html lang="pl">
+          <head>
+            <meta charset="utf-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1">
+            <title>RLQShell - Pobieranie</title>
+            <style>
+              * { margin: 0; padding: 0; box-sizing: border-box; }
+              body { font-family: 'Segoe UI', system-ui, sans-serif; background: #f0f2f5; color: #1a1a2e; min-height: 100vh; display: flex; align-items: center; justify-content: center; }
+              .container { max-width: 640px; width: 100%; margin: 2rem; background: #fff; border-radius: 12px; box-shadow: 0 2px 16px rgba(0,0,0,0.08); overflow: hidden; }
+              .header { background: linear-gradient(135deg, #0f3460, #16213e); color: #fff; padding: 2rem; text-align: center; }
+              .header h1 { font-size: 1.8rem; font-weight: 700; margin-bottom: 0.3rem; }
+              .header p { opacity: 0.85; font-size: 0.95rem; }
+              .version-badge { display: inline-block; background: rgba(255,255,255,0.15); border-radius: 20px; padding: 0.3rem 1rem; margin-top: 0.8rem; font-size: 0.9rem; }
+              .content { padding: 2rem; }
+              .download-card { border: 1px solid #e0e0e0; border-radius: 8px; padding: 1.2rem; margin-bottom: 1rem; transition: border-color 0.2s; }
+              .download-card:hover { border-color: #0f3460; }
+              .download-card h3 { font-size: 1rem; margin-bottom: 0.5rem; }
+              .download-card .meta { font-size: 0.82rem; color: #666; margin-bottom: 0.8rem; }
+              .download-card .sha { font-family: 'Consolas', monospace; font-size: 0.72rem; color: #888; word-break: break-all; background: #f8f8f8; padding: 0.4rem 0.6rem; border-radius: 4px; }
+              .btn { display: inline-block; background: #0f3460; color: #fff; text-decoration: none; padding: 0.6rem 1.5rem; border-radius: 6px; font-size: 0.9rem; font-weight: 600; transition: background 0.2s; }
+              .btn:hover { background: #1a4a8a; }
+              .footer { text-align: center; padding: 1rem 2rem 1.5rem; font-size: 0.8rem; color: #999; }
+            </style>
+          </head>
+          <body>
+            <div class="container">
+              <div class="header">
+                <h1>RLQShell</h1>
+                <p>Nowoczesny klient SSH z synchronizacja przez prywatna chmure</p>
+                <div class="version-badge">v$v &mdash; $date</div>
+              </div>
+              <div class="content">
+                <div class="download-card">
+                  <h3>Instalator MSI (zalecany)</h3>
+                  <div class="meta">Rozmiar: $msiSizeMB MB &mdash; instalacja systemowa z Menu Start i pulpitu</div>
+                  <a class="btn" href="releases/RLQShell-$v-x64.msi">Pobierz MSI</a>
+                  <div class="sha" style="margin-top:0.8rem">SHA256: $msiHash</div>
+                </div>
+                <div class="download-card">
+                  <h3>Plik EXE (portable)</h3>
+                  <div class="meta">Rozmiar: $exeSizeMB MB &mdash; uruchom bez instalacji</div>
+                  <a class="btn" href="releases/RLQShell-$v.exe">Pobierz EXE</a>
+                  <div class="sha" style="margin-top:0.8rem">SHA256: $exeHash</div>
+                </div>
+              </div>
+              <div class="footer">RLQ IT &mdash; update.lesinski.it</div>
+            </div>
+          </body>
+          </html>
+          "@
+          [System.IO.File]::WriteAllText("$PWD\dist\index.html", $html, [System.Text.UTF8Encoding]::new($false))
+          Write-Output "Generated dist\index.html"
+
+      - name: Wgraj na FTP
+        shell: powershell
+        env:
+          FTP_HOST: ${{ secrets.FTP_HOST }}
+          FTP_USER: ${{ secrets.FTP_USER }}
+          FTP_PASS: ${{ secrets.FTP_PASS }}
+        run: |
+          $v = (Get-Content version_tag.txt -Raw).Trim()
+          python scripts/ftp_upload.py $v

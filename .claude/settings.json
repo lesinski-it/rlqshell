@@ -32,7 +32,23 @@
       "Bash(RUSTC=\"C:/Users/ravczy/.cargo/bin/rustc.exe\" CARGO=\"C:/Users/ravczy/.cargo/bin/cargo.exe\" PATH=\"C:/Users/ravczy/.cargo/bin:$PATH\" python -m pip install aardwolf --no-cache-dir --no-build-isolation)",
       "Bash(.venv313/Scripts/pyinstaller.exe termplus.spec --clean)",
       "Bash(.venv313/Scripts/python.exe -c \":*)",
-      "Bash(python -c ':*)"
+      "Bash(python -c ':*)",
+      "Bash(winget --version)",
+      "Bash(powershell -NoProfile -Command \"Invoke-WebRequest -Uri 'https://dot.net/v1/dotnet-install.ps1' -OutFile C:\\\\Users\\\\ravczy\\\\dotnet-install.ps1 -UseBasicParsing; \\(Get-Item C:\\\\Users\\\\ravczy\\\\dotnet-install.ps1\\).Length\")",
+      "Bash(powershell -NoProfile -ExecutionPolicy Bypass -File C:\\\\Users\\\\ravczy\\\\dotnet-install.ps1 -Channel 8.0 -InstallDir C:\\\\Users\\\\ravczy\\\\.dotnet -NoPath)",
+      "Bash(powershell -NoProfile -ExecutionPolicy Bypass -File \"C:/Users/ravczy/dotnet-install.ps1\" -Channel 8.0 -InstallDir \"C:/Users/ravczy/.dotnet\" -NoPath)",
+      "Bash(export PATH=\"/c/Users/ravczy/.dotnet:/c/Users/ravczy/.dotnet/tools:$PATH\")",
+      "Bash(dotnet --version)",
+      "Bash(wix --version)",
+      "Read(//c/Users/ravczy/.dotnet/shared/Microsoft.NETCore.App//**)",
+      "Bash(dotnet tool:*)",
+      "Bash(export DOTNET_ROOT=\"C:\\\\\\\\Users\\\\\\\\ravczy\\\\\\\\.dotnet\")",
+      "Bash(wix extension:*)",
+      "Read(//d/Projekty programistyczne/RLQBackup/scripts/**)",
+      "Read(//d/Projekty programistyczne/RLQBackup/.gitea/workflows/**)",
+      "Read(//d/Projekty programistyczne/RLQBackup/dist/**)",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('scripts/ftp_upload.py', encoding='utf-8'\\).read\\(\\)\\); print\\('ftp_upload.py: syntax OK'\\)\")",
+      "Bash(powershell -NoProfile -Command ':*)"
     ]
   }
 }
