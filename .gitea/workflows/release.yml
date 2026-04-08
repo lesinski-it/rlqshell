@@ -103,7 +103,7 @@ jobs:
             dist/RLQShell-${{ steps.version.outputs.version }}-x64.msi
 
   build_linux:
-    runs-on: [self-hosted:host]
+    runs-on: [self-hosted]
     outputs:
       version: ${{ steps.version.outputs.version }}
 
