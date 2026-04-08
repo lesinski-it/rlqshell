@@ -96,7 +96,7 @@ fi
 BINARY_PATH="${DIST_DIR}/${APP_NAME}"
 
 
-# Przygotuj katalogi
+# Najpierw usuń build, potem twórz katalogi i kopiuj pliki
 rm -rf "${BUILD_DIR}"
 mkdir -p "${PKG_ROOT}/DEBIAN"
 mkdir -p "${PKG_ROOT}${INSTALL_DIR}"
