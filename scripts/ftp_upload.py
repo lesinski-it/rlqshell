@@ -1,33 +1,26 @@
 """
-FTP upload script dla pipeline CI/CD Gitea Actions.
+FTP upload script for Gitea Actions release pipeline.
 
-Używanie:
-    python scripts/ftp_upload.py <wersja>
-    np.: python scripts/ftp_upload.py 0.1.0
+Usage:
+    python scripts/ftp_upload.py <version>
+    e.g. python scripts/ftp_upload.py 0.1.0
 
-Zmienne środowiskowe (Gitea Secrets):
-    FTP_HOST      - adres serwera FTP (domyślnie: update.lesinski.it)
-    FTP_USER      - nazwa użytkownika FTP
-    FTP_PASS      - hasło FTP
-    FTP_BASE_DIR  - (opcjonalnie) katalog bazowy na serwerze, nadpisuje wartość domyślną
-
-Struktura docelowa na serwerze — jeden FTP user wspólny z RLQBackup,
-RLQShell ląduje w katalogu obok (siostra dla rlqbackup):
-
-    /home/lesinski_it_rlqbackup/public_html/
-    ├── rlqbackup/            <- zarządzany przez pipeline RLQBackup
-    └── rlqshell/             <- ten katalog
-        ├── index.html
-        ├── version.json      <- wgrywany JAKO OSTATNI (atomowość podmiany)
-        └── releases/
-            ├── RLQShell-0.1.0-x64.msi
-            └── RLQShell-0.1.0.exe
+Expected local files in dist/:
+  - RLQShell-<version>-x64.msi
+  - RLQShell.exe (copied to RLQShell-<version>.exe before upload)
+  - rlqshell_<version>_<arch>.deb (at least one file, e.g. amd64)
+  - index.html
+  - version.json
 """
 
+from __future__ import annotations
+
 import ftplib
+import glob
 import os
 import shutil
 import sys
+from pathlib import Path
 
 
 DEFAULT_FTP_BASE_DIR = "/home/lesinski_it_rlqbackup/public_html/rlqshell"
@@ -35,25 +28,23 @@ UPDATE_HOST = "update.lesinski.it"
 
 
 def _ensure_dir(ftp: ftplib.FTP, path: str) -> None:
-    """Tworzy katalog na FTP jeśli nie istnieje."""
+    """Create remote directory if it does not exist."""
     try:
         ftp.mkd(path)
-        print(f"  Utworzono katalog: {path}")
-    except ftplib.error_perm as e:
-        if "550" in str(e):
-            pass  # katalog już istnieje
-        else:
+        print(f"  Created directory: {path}")
+    except ftplib.error_perm as exc:
+        if "550" not in str(exc):
             raise
 
 
 def _upload_file(ftp: ftplib.FTP, local_path: str, remote_path: str) -> None:
-    """Wgrywa plik na FTP z wyświetlaniem postępu."""
+    """Upload a single file with progress output."""
     file_size = os.path.getsize(local_path)
     uploaded = [0]
 
     def callback(data: bytes) -> None:
         uploaded[0] += len(data)
-        pct = uploaded[0] * 100 // file_size
+        pct = uploaded[0] * 100 // max(file_size, 1)
         mb_done = uploaded[0] / 1_048_576
         mb_total = file_size / 1_048_576
         print(
@@ -63,14 +54,20 @@ def _upload_file(ftp: ftplib.FTP, local_path: str, remote_path: str) -> None:
             flush=True,
         )
 
-    with open(local_path, "rb") as f:
-        ftp.storbinary(f"STOR {remote_path}", f, blocksize=65536, callback=callback)
-    print()  # nowa linia po postępie
+    with open(local_path, "rb") as file_obj:
+        ftp.storbinary(f"STOR {remote_path}", file_obj, blocksize=65536, callback=callback)
+    print()
+
+
+def _required(path: str) -> None:
+    if not os.path.exists(path):
+        print(f"Error: missing required file: {path}", file=sys.stderr)
+        sys.exit(1)
 
 
 def main() -> None:
     if len(sys.argv) < 2:
-        print("Użycie: python scripts/ftp_upload.py <wersja>", file=sys.stderr)
+        print("Usage: python scripts/ftp_upload.py <version>", file=sys.stderr)
         sys.exit(1)
 
     version = sys.argv[1]
@@ -81,55 +78,59 @@ def main() -> None:
     base_dir = os.environ.get("FTP_BASE_DIR", DEFAULT_FTP_BASE_DIR)
 
     if not user or not password:
+        print("Error: missing FTP_USER or FTP_PASS environment variable", file=sys.stderr)
+        sys.exit(1)
+
+    msi_local = f"dist/RLQShell-{version}-x64.msi"
+    exe_src = "dist/RLQShell.exe"
+    exe_local = f"dist/RLQShell-{version}.exe"
+    version_json_local = "dist/version.json"
+    index_html_local = "dist/index.html"
+    deb_files = sorted(glob.glob(f"dist/rlqshell_{version}_*.deb"))
+
+    _required(msi_local)
+    _required(exe_src)
+    _required(version_json_local)
+    _required(index_html_local)
+
+    if not deb_files:
         print(
-            "Błąd: brak zmiennych środowiskowych FTP_USER lub FTP_PASS",
+            f"Error: expected at least one Linux package: dist/rlqshell_{version}_*.deb",
             file=sys.stderr,
         )
         sys.exit(1)
 
-    msi_local = f"dist/RLQShell-{version}-x64.msi"
-    exe_local = f"dist/RLQShell-{version}.exe"
-    # PyInstaller (rlqshell.spec) buduje dist/RLQShell.exe — kopiujemy z wersją w nazwie
-    exe_src = "dist/RLQShell.exe"
-    version_json_local = "dist/version.json"
-    index_html_local = "dist/index.html"
-
-    # Sprawdź czy pliki istnieją
-    for path in [msi_local, exe_src, version_json_local, index_html_local]:
-        if not os.path.exists(path):
-            print(f"Błąd: plik nie istnieje: {path}", file=sys.stderr)
-            sys.exit(1)
-
-    # Kopiuj exe z wersją w nazwie
+    # PyInstaller creates dist/RLQShell.exe; publish a versioned filename.
     shutil.copy2(exe_src, exe_local)
 
     releases_dir = f"{base_dir}/releases"
 
-    print(f"Łączenie z FTP: {host}")
+    print(f"Connecting to FTP: {host}")
     with ftplib.FTP(host, user, password, timeout=60) as ftp:
         ftp.set_pasv(True)
-        print(f"  Zalogowano jako: {user}")
+        print(f"  Logged in as: {user}")
 
         _ensure_dir(ftp, base_dir)
         _ensure_dir(ftp, releases_dir)
 
-        # 1. Wgraj MSI
-        print(f"Wgrywanie MSI (v{version})...")
-        _upload_file(ftp, msi_local, f"{releases_dir}/RLQShell-{version}-x64.msi")
+        print(f"Uploading MSI (v{version})...")
+        _upload_file(ftp, msi_local, f"{releases_dir}/{Path(msi_local).name}")
 
-        # 2. Wgraj EXE
-        print(f"Wgrywanie EXE (v{version})...")
-        _upload_file(ftp, exe_local, f"{releases_dir}/RLQShell-{version}.exe")
+        print(f"Uploading EXE (v{version})...")
+        _upload_file(ftp, exe_local, f"{releases_dir}/{Path(exe_local).name}")
 
-        # 3. Wgraj index.html
-        print("Wgrywanie index.html...")
+        for deb_path in deb_files:
+            print(f"Uploading DEB: {Path(deb_path).name} ...")
+            _upload_file(ftp, deb_path, f"{releases_dir}/{Path(deb_path).name}")
+
+        print("Uploading index.html...")
         _upload_file(ftp, index_html_local, f"{base_dir}/index.html")
 
-        # 4. Wgraj version.json JAKO OSTATNI (atomowość)
-        print("Wgrywanie version.json...")
+        # Upload manifest last so clients see complete release atomically.
+        print("Uploading version.json...")
         _upload_file(ftp, version_json_local, f"{base_dir}/version.json")
 
-    print(f"\nGotowe! Wersja {version} opublikowana na {host}.")
+    print(f"\nDone. Version {version} published to {host}.")
     print(f"Manifest: https://{host}/rlqshell/version.json")
 
 
