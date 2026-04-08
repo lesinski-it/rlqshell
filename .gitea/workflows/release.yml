@@ -125,12 +125,13 @@ jobs:
 
       - name: Resolve version from tag
         id: version
-        shell: powershell
+        shell: bash
         run: |
-          $tag = "${{ github.ref_name }}"
-          $version = $tag.TrimStart('v')
-          Write-Output "Building Linux version: $version"
-          Add-Content -Path $env:GITHUB_OUTPUT -Value "version=$version"
+          set -euo pipefail
+          tag="${{ github.ref_name }}"
+          version="${tag#v}"
+          echo "Building Linux version: ${version}"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
 
       - name: Setup Python 3.12
         uses: actions/setup-python@v5
