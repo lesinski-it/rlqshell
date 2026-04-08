@@ -114,7 +114,14 @@ mkdir -p "${PKG_ROOT}/usr/share/icons/hicolor/scalable/apps"
 
 install -m 0755 "${BINARY_PATH}" "${PKG_ROOT}${INSTALL_DIR}/${APP_NAME}"
 install -m 0644 "${ICON_SOURCE}" "${PKG_ROOT}/usr/share/icons/hicolor/scalable/apps/rlqshell.svg"
-ln -sf "${INSTALL_DIR}/${APP_NAME}" "${PKG_ROOT}/usr/bin/rlqshell"
+
+# Sprawdź, czy plik docelowy istnieje przed utworzeniem symlinka
+if [[ -f "${PKG_ROOT}${INSTALL_DIR}/${APP_NAME}" ]]; then
+  ln -sf "${INSTALL_DIR}/${APP_NAME}" "${PKG_ROOT}/usr/bin/rlqshell"
+else
+  echo "ERROR: Plik docelowy dla symlinka nie istnieje: ${PKG_ROOT}${INSTALL_DIR}/${APP_NAME}" >&2
+  exit 1
+fi
 
 cat > "${PKG_ROOT}/usr/share/applications/rlqshell.desktop" <<'EOF'
 [Desktop Entry]
@@ -142,8 +149,17 @@ Description: Modern cross-platform SSH client with private-cloud sync
  It includes host management, key storage and optional cloud sync providers.
 EOF
 
-chmod 0755 "${PKG_ROOT}${INSTALL_DIR}/${APP_NAME}"
-chmod 0755 "${PKG_ROOT}/usr/bin/rlqshell"
+if [[ -f "${PKG_ROOT}${INSTALL_DIR}/${APP_NAME}" ]]; then
+  chmod 0755 "${PKG_ROOT}${INSTALL_DIR}/${APP_NAME}"
+else
+  echo "WARNING: Plik wykonywalny nie istnieje: ${PKG_ROOT}${INSTALL_DIR}/${APP_NAME}" >&2
+fi
+
+if [[ -L "${PKG_ROOT}/usr/bin/rlqshell" ]]; then
+  chmod 0755 "${PKG_ROOT}/usr/bin/rlqshell"
+else
+  echo "WARNING: Symlink nie istnieje: ${PKG_ROOT}/usr/bin/rlqshell" >&2
+fi
 chmod 0644 "${PKG_ROOT}/usr/share/applications/rlqshell.desktop"
 chmod 0644 "${PKG_ROOT}/DEBIAN/control"
 
