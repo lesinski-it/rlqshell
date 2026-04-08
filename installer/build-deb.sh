@@ -95,20 +95,8 @@ fi
 
 BINARY_PATH="${DIST_DIR}/${APP_NAME}"
 
-# Skopiuj binarkę do katalogu DEB przed tworzeniem symlinka
-if [[ ! -f "${BINARY_PATH}" ]]; then
-  echo "Missing ${BINARY_PATH}. Run without --skip-pyinstaller or build it manually." >&2
-  exit 1
-fi
-mkdir -p "${PKG_ROOT}${INSTALL_DIR}"
-cp -f "${BINARY_PATH}" "${PKG_ROOT}${INSTALL_DIR}/${APP_NAME}"
 
-ICON_SOURCE="${REPO_ROOT}/rlqshell/resources/images/logo.svg"
-if [[ ! -f "${ICON_SOURCE}" ]]; then
-  echo "Missing icon file: ${ICON_SOURCE}" >&2
-  exit 1
-fi
-
+# Przygotuj katalogi
 rm -rf "${BUILD_DIR}"
 mkdir -p "${PKG_ROOT}/DEBIAN"
 mkdir -p "${PKG_ROOT}${INSTALL_DIR}"
@@ -116,7 +104,18 @@ mkdir -p "${PKG_ROOT}/usr/bin"
 mkdir -p "${PKG_ROOT}/usr/share/applications"
 mkdir -p "${PKG_ROOT}/usr/share/icons/hicolor/scalable/apps"
 
-# Binarka już skopiowana powyżej
+# Skopiuj binarkę do katalogu DEB przed tworzeniem symlinka
+if [[ ! -f "${BINARY_PATH}" ]]; then
+  echo "Missing ${BINARY_PATH}. Run without --skip-pyinstaller or build it manually." >&2
+  exit 1
+fi
+cp -f "${BINARY_PATH}" "${PKG_ROOT}${INSTALL_DIR}/${APP_NAME}"
+
+ICON_SOURCE="${REPO_ROOT}/rlqshell/resources/images/logo.svg"
+if [[ ! -f "${ICON_SOURCE}" ]]; then
+  echo "Missing icon file: ${ICON_SOURCE}" >&2
+  exit 1
+fi
 install -m 0644 "${ICON_SOURCE}" "${PKG_ROOT}/usr/share/icons/hicolor/scalable/apps/rlqshell.svg"
 
 # Sprawdź, czy plik docelowy istnieje przed utworzeniem symlinka
