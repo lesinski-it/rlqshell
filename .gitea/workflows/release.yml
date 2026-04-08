@@ -106,7 +106,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "build-msi.ps1 failed" }
 
       - name: Upload Windows artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v3
         with:
           name: windows-dist
           if-no-files-found: error
@@ -164,7 +164,7 @@ jobs:
           bash installer/build-deb.sh --version "${{ steps.version.outputs.version }}" --arch amd64
 
       - name: Upload Linux artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v3
         with:
           name: linux-dist
           if-no-files-found: error
@@ -201,7 +201,7 @@ jobs:
           echo "version=$win_version" >> "$GITHUB_OUTPUT"
 
       - name: Download build artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v3
         with:
           pattern: "*-dist"
           merge-multiple: true
