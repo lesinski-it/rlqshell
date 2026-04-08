@@ -34,6 +34,13 @@ jobs:
           Set-Content pyproject.toml -Value $py -NoNewline -Encoding utf8
           Write-Output "Patched pyproject.toml version to $v"
 
+      - name: Show pyproject.toml after version patch
+        shell: powershell
+        run: |
+          Write-Output "--- pyproject.toml ---"
+          Get-Content pyproject.toml
+          Write-Output "--- END ---"
+
       - name: Install Python dependencies
         shell: powershell
         env:
