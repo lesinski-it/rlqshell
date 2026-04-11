@@ -264,8 +264,37 @@ def main() -> None:
     # Command Palette (Ctrl+K)
     palette = CommandPalette(window)
 
+    # Auto-update manager
+    from rlqshell.core.updater import UpdateManager
+
+    update_manager = UpdateManager(app.config, parent=window)
+
+    def _on_update_available(manifest: dict) -> None:
+        from rlqshell.ui.dialogs.update_dialog import UpdateDialog
+        from rlqshell.ui.widgets.toast import ToastManager
+
+        version = manifest.get("version", "?")
+        forced = manifest.get("_forced", False)
+
+        if forced:
+            dlg = UpdateDialog(manifest, update_manager, forced=True, parent=window)
+            dlg.exec()
+        else:
+            def _show_update_dialog() -> None:
+                dlg = UpdateDialog(manifest, update_manager, parent=window)
+                dlg.exec()
+
+            ToastManager.instance().show_toast(
+                f"Dostępna aktualizacja: v{version} — kliknij aby zaktualizować",
+                toast_type="info",
+                duration_ms=10000,
+                on_click=_show_update_dialog,
+            )
+
+    update_manager.update_available.connect(_on_update_available)
+
     def _open_settings():
-        dlg = SettingsDialog(app.config, window, sync_engine=sync_engine)
+        dlg = SettingsDialog(app.config, window, sync_engine=sync_engine, update_manager=update_manager)
         dlg.terminal_settings_changed.connect(connections_page.refresh_terminal_config)
         dlg.appearance_settings_changed.connect(
             lambda: window.apply_appearance(app.config)
@@ -361,6 +390,7 @@ def main() -> None:
     # Cleanup on close
     def _cleanup() -> None:
         logger.info("Cleaning up resources…")
+        update_manager.stop()
         tunnel_engine.stop_all()
         connection_pool.close_all()
         sync_engine.stop_auto_sync()
@@ -385,6 +415,8 @@ def main() -> None:
         screen.x() + (screen.width() - new_w) // 2,
         screen.y() + (screen.height() - new_h) // 2,
     )
+
+    update_manager.start()
 
     with loop:
         loop.run_forever()

@@ -21,6 +21,7 @@ from rlqshell.ui.settings.general_settings import GeneralSettings
 from rlqshell.ui.settings.keybinding_settings import KeybindingSettings
 from rlqshell.ui.settings.sync_settings import SyncSettings
 from rlqshell.ui.settings.terminal_settings import TerminalSettings
+from rlqshell.ui.settings.update_settings import UpdateSettings
 
 logger = logging.getLogger(__name__)
 
@@ -31,11 +32,12 @@ class SettingsDialog(QDialog):
     terminal_settings_changed = Signal()
     appearance_settings_changed = Signal()
 
-    def __init__(self, config: ConfigManager, parent=None, sync_engine=None) -> None:
+    def __init__(self, config: ConfigManager, parent=None, sync_engine=None, update_manager=None) -> None:
         super().__init__(parent)
         self.setWindowTitle("Settings")
         self.setFixedSize(700, 500)
         self._sync_engine = sync_engine
+        self._update_manager = update_manager
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -81,6 +83,7 @@ class SettingsDialog(QDialog):
         self._add_page("Appearance", appearance_page)
         self._add_page("Key Bindings", KeybindingSettings(config))
         self._add_page("Sync", SyncSettings(config, sync_engine=sync_engine))
+        self._add_page("Updates", UpdateSettings(config, update_manager=update_manager))
 
         self._sidebar.currentRowChanged.connect(self._stack.setCurrentIndex)
         self._sidebar.setCurrentRow(0)

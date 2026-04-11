@@ -40,6 +40,10 @@
         "sync_on_start": false,
         "sync_on_close": false
     },
+    "updates": {
+        "auto_check": true,
+        "check_interval_hours": 24
+    },
     "keybindings": {
         "command_palette": "Ctrl+K",
         "jump_to_tab": "Ctrl+J",

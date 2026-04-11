@@ -39,6 +39,18 @@ jobs:
           Set-Content pyproject.toml -Value $py -NoNewline -Encoding utf8
           Write-Output "Patched pyproject.toml version to $v"
 
+      - name: Update version in source files
+        shell: powershell
+        run: |
+          $v = "${{ steps.version.outputs.version }}"
+          $constants = Get-Content rlqshell/app/constants.py -Raw
+          $constants = $constants -replace 'APP_VERSION = "[^"]+"', "APP_VERSION = `"$v`""
+          Set-Content rlqshell/app/constants.py -Value $constants -NoNewline -Encoding utf8
+          $init = Get-Content rlqshell/__init__.py -Raw
+          $init = $init -replace '__version__ = "[^"]+"', "__version__ = `"$v`""
+          Set-Content rlqshell/__init__.py -Value $init -NoNewline -Encoding utf8
+          Write-Output "Patched APP_VERSION and __version__ to $v"
+
       - name: Show pyproject.toml after version patch
         shell: powershell
         run: |
@@ -132,6 +144,15 @@ jobs:
           version="${tag#v}"
           echo "Building Linux version: ${version}"
           echo "version=${version}" >> "$GITHUB_OUTPUT"
+
+      - name: Update version in source files
+        shell: bash
+        run: |
+          set -euo pipefail
+          v="${{ steps.version.outputs.version }}"
+          sed -i "s/APP_VERSION = \"[^\"]*\"/APP_VERSION = \"$v\"/" rlqshell/app/constants.py
+          sed -i "s/__version__ = \"[^\"]*\"/__version__ = \"$v\"/" rlqshell/__init__.py
+          echo "Patched APP_VERSION and __version__ to $v"
 
       - name: Setup Python 3.12
         uses: actions/setup-python@v5

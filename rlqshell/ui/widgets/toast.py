@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import QPropertyAnimation, QEasingCurve, QTimer, Qt
+from collections.abc import Callable
+
+from PySide6.QtCore import QPropertyAnimation, QEasingCurve, QTimer, Qt, Signal
+from PySide6.QtGui import QMouseEvent
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QWidget
 
 from rlqshell.app.constants import Colors
@@ -17,6 +20,8 @@ _TOAST_COLORS = {
 
 class ToastNotification(QWidget):
     """Small auto-dismissing notification at the bottom of the window."""
+
+    clicked = Signal()
 
     def __init__(
         self,
@@ -65,6 +70,10 @@ class ToastNotification(QWidget):
         self.move(x, y)
         self.show()
 
+    def mousePressEvent(self, event: QMouseEvent) -> None:
+        self.clicked.emit()
+        self._dismiss()
+
     def _dismiss(self) -> None:
         self.close()
         self.deleteLater()
@@ -92,9 +101,13 @@ class ToastManager:
         message: str,
         toast_type: str = "info",
         duration_ms: int = 3000,
+        on_click: Callable[[], None] | None = None,
     ) -> None:
         """Show a toast notification."""
         if self._parent is None:
             return
         toast = ToastNotification(message, toast_type, duration_ms, self._parent)
+        if on_click is not None:
+            toast.clicked.connect(on_click)
+            toast.setCursor(Qt.CursorShape.PointingHandCursor)
         toast.show_at_bottom(self._parent)
