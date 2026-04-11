@@ -41,3 +41,8 @@ termplus_*.log
 
 # Local debug artifacts
 splash_test.png
+
+# Claude Code workspace (per-user settings, docs, project instructions)
+.claude/
+CLAUDE.md
+todo.txt
