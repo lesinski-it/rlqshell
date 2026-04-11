@@ -434,13 +434,14 @@ class GroupSection(QWidget):
         header_layout.addWidget(self._header_btn, 1)
 
         # Group context menu button
-        menu_btn = QPushButton("\u22ef")
+        menu_btn = QPushButton("...")
         menu_btn.setFixedSize(28, 28)
         menu_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         menu_btn.setStyleSheet(
             f"QPushButton {{ "
             f"  background: transparent; border: none; "
             f"  color: {Colors.TEXT_SECONDARY}; font-size: 16px; font-weight: 700; "
+            f"  padding: 0px; min-height: 0px; min-width: 0px; "
             f"}}"
             f"QPushButton:hover {{ color: {Colors.TEXT_PRIMARY}; "
             f"  background-color: {Colors.BG_HOVER}; border-radius: 4px; }}"
