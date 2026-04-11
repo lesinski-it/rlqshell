@@ -215,6 +215,129 @@ def test_snippet_search(tmp_path):
     db.close()
 
 
+def test_snippet_tags_roundtrip(tmp_path):
+    db = _make_db(tmp_path)
+    mgr = SnippetManager(db)
+    sid = mgr.create_snippet(
+        Snippet(name="Ps", script="docker ps", tags=["docker", "prod"])
+    )
+
+    fetched = mgr.get_snippet(sid)
+    assert fetched is not None
+    assert fetched.tags == ["docker", "prod"]
+
+    fetched.tags = ["docker"]
+    mgr.update_snippet(fetched)
+    assert mgr.get_snippet(sid).tags == ["docker"]
+    db.close()
+
+
+def test_snippet_tags_isolated_from_host_tags(tmp_path):
+    """Regression: adding a tag to a snippet must not leak into host tags."""
+    db = _make_db(tmp_path)
+    host_mgr = HostManager(db)
+    snip_mgr = SnippetManager(db)
+
+    snip_mgr.create_snippet(
+        Snippet(name="Ps", script="docker ps", tags=["docker", "prod"])
+    )
+
+    # Snippet tags must NOT show up in host tag listings.
+    assert host_mgr.list_tags() == []
+
+    # Creating a host tag with the same name as a snippet tag must not
+    # collide — they live in different tables now.
+    host_mgr.create_tag(Tag(name="prod", color="#22c55e"))
+    host_tags = host_mgr.list_tags()
+    assert len(host_tags) == 1
+    assert host_tags[0].name == "prod"
+    assert host_tags[0].color == "#22c55e"
+
+    # Snippet tag listing must not pick up the newly-created host tag.
+    assert set(snip_mgr.list_all_tags()) == {"docker", "prod"}
+    db.close()
+
+
+def test_snippet_list_all_tags_returns_only_snippet_tags(tmp_path):
+    db = _make_db(tmp_path)
+    host_mgr = HostManager(db)
+    snip_mgr = SnippetManager(db)
+
+    host_mgr.create_tag(Tag(name="datacenter-warsaw", color="#e94560"))
+    snip_mgr.create_snippet(Snippet(name="Ls", script="ls -la", tags=["files"]))
+
+    assert snip_mgr.list_all_tags() == ["files"]
+    db.close()
+
+
+def test_snippet_tags_migration_from_legacy_schema(tmp_path):
+    """Old databases with snippet_tags(snippet_id, tag_id) migrate cleanly."""
+    db_path = tmp_path / "legacy.db"
+
+    # Bootstrap a normal DB, then downgrade only snippet_tags to the
+    # legacy (snippet_id, tag_id) shape and seed the "shared tags" bug.
+    db = Database(db_path)
+    db.initialize()
+
+    host_mgr = HostManager(db)
+    snip_mgr = SnippetManager(db)
+
+    host_id = host_mgr.create_host(Host(label="web-1", address="1.1.1.1"))
+    snip_id = snip_mgr.create_snippet(Snippet(name="Ps", script="docker ps"))
+
+    db.execute("DROP TABLE snippet_tags")
+    db.execute(
+        "CREATE TABLE snippet_tags ("
+        "snippet_id INTEGER REFERENCES snippets(id) ON DELETE CASCADE, "
+        "tag_id INTEGER REFERENCES tags(id) ON DELETE CASCADE, "
+        "PRIMARY KEY (snippet_id, tag_id))"
+    )
+
+    shared_id = host_mgr.create_tag(Tag(name="shared", color="#22c55e"))
+    host_only_id = host_mgr.create_tag(Tag(name="host-only", color="#3b82f6"))
+    # Insert a snippet-only tag the way the old snippet_manager did it.
+    snip_only_id = db.execute(
+        "INSERT INTO tags (name) VALUES ('snippet-only')"
+    ).lastrowid
+
+    host_mgr.add_tag_to_host(host_id, shared_id)
+    host_mgr.add_tag_to_host(host_id, host_only_id)
+    db.execute(
+        "INSERT INTO snippet_tags (snippet_id, tag_id) VALUES (?, ?)",
+        (snip_id, shared_id),
+    )
+    db.execute(
+        "INSERT INTO snippet_tags (snippet_id, tag_id) VALUES (?, ?)",
+        (snip_id, snip_only_id),
+    )
+    db.close()
+
+    # Reopen — migration should fire.
+    db = Database(db_path)
+    db.initialize()
+
+    cols = {r[1] for r in db.fetchall("PRAGMA table_info(snippet_tags)")}
+    assert cols == {"snippet_id", "name"}
+
+    snip_mgr2 = SnippetManager(db)
+    snippet = snip_mgr2.get_snippet(snip_id)
+    assert snippet is not None
+    assert sorted(snippet.tags or []) == ["shared", "snippet-only"]
+
+    # Orphaned "snippet-only" tag purged; host-referenced tags remain.
+    host_mgr2 = HostManager(db)
+    host_tag_names = {t.name for t in host_mgr2.list_tags()}
+    assert host_tag_names == {"shared", "host-only"}
+
+    # Idempotent re-run.
+    db.close()
+    db2 = Database(db_path)
+    db2.initialize()
+    cols2 = {r[1] for r in db2.fetchall("PRAGMA table_info(snippet_tags)")}
+    assert cols2 == {"snippet_id", "name"}
+    db2.close()
+
+
 # === Vault ===
 
 def test_vault_integration(tmp_path):

@@ -151,9 +151,9 @@ CREATE TABLE IF NOT EXISTS snippets (
 );
 
 CREATE TABLE IF NOT EXISTS snippet_tags (
-    snippet_id INTEGER REFERENCES snippets(id) ON DELETE CASCADE,
-    tag_id INTEGER REFERENCES tags(id) ON DELETE CASCADE,
-    PRIMARY KEY (snippet_id, tag_id)
+    snippet_id INTEGER NOT NULL REFERENCES snippets(id) ON DELETE CASCADE,
+    name       TEXT    NOT NULL,
+    PRIMARY KEY (snippet_id, name)
 );
 
 -- === PORT FORWARDING ===
@@ -269,6 +269,70 @@ class Database:
         if "color_label" not in cols:
             conn.execute("ALTER TABLE snippets ADD COLUMN color_label TEXT")
             conn.commit()
+
+        # Separate snippet tags from host tags (v0.3):
+        # Old schema: snippet_tags(snippet_id, tag_id) pointing into shared `tags`
+        # New schema: snippet_tags(snippet_id, name) — fully denormalised, no
+        # overlap with host tags. Orphaned rows in `tags` (i.e. tags that
+        # existed only because a snippet referenced them) are purged so
+        # HostManager.list_tags() stops seeing them.
+        snippet_tags_cols = {
+            r[1] for r in conn.execute("PRAGMA table_info(snippet_tags)").fetchall()
+        }
+        if "tag_id" in snippet_tags_cols:
+            logger.info("Migrating snippet_tags to name-based schema")
+            # Switch to manual transaction mode so we can interleave PRAGMA
+            # (which must run outside a transaction) with explicit BEGIN/COMMIT.
+            prev_isolation = conn.isolation_level
+            conn.isolation_level = None
+            try:
+                conn.execute("PRAGMA foreign_keys = OFF")
+                conn.execute("BEGIN")
+
+                # Tag ids referenced by snippets but not by any host — these
+                # leaked into HostManager.list_tags() and must be removed.
+                orphan_ids = [
+                    r[0]
+                    for r in conn.execute(
+                        "SELECT DISTINCT tag_id FROM snippet_tags "
+                        "WHERE tag_id NOT IN (SELECT tag_id FROM host_tags)"
+                    ).fetchall()
+                ]
+
+                conn.execute(
+                    """CREATE TABLE snippet_tags_new (
+                        snippet_id INTEGER NOT NULL
+                            REFERENCES snippets(id) ON DELETE CASCADE,
+                        name       TEXT    NOT NULL,
+                        PRIMARY KEY (snippet_id, name)
+                    )"""
+                )
+                conn.execute(
+                    "INSERT OR IGNORE INTO snippet_tags_new (snippet_id, name) "
+                    "SELECT st.snippet_id, t.name "
+                    "FROM snippet_tags st JOIN tags t ON t.id = st.tag_id"
+                )
+                conn.execute("DROP TABLE snippet_tags")
+                conn.execute("ALTER TABLE snippet_tags_new RENAME TO snippet_tags")
+
+                if orphan_ids:
+                    placeholders = ",".join("?" * len(orphan_ids))
+                    conn.execute(
+                        f"DELETE FROM tags WHERE id IN ({placeholders})",
+                        orphan_ids,
+                    )
+
+                conn.execute("COMMIT")
+                logger.info(
+                    "snippet_tags migrated; removed %d orphaned tag(s)",
+                    len(orphan_ids),
+                )
+            except Exception:
+                conn.execute("ROLLBACK")
+                raise
+            finally:
+                conn.execute("PRAGMA foreign_keys = ON")
+                conn.isolation_level = prev_isolation
 
     def _get_connection(self) -> sqlite3.Connection:
         if self._connection is None:

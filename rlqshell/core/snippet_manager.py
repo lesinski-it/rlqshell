@@ -142,9 +142,7 @@ class SnippetManager:
 
     def _get_snippet_tags(self, snippet_id: int) -> list[str]:
         rows = self._db.fetchall(
-            "SELECT t.name FROM tags t "
-            "JOIN snippet_tags st ON st.tag_id = t.id "
-            "WHERE st.snippet_id = ? ORDER BY t.name",
+            "SELECT name FROM snippet_tags WHERE snippet_id = ? ORDER BY name",
             (snippet_id,),
         )
         return [r["name"] for r in rows]
@@ -155,17 +153,9 @@ class SnippetManager:
             name = name.strip()
             if not name:
                 continue
-            row = self._db.fetchone("SELECT id FROM tags WHERE name = ?", (name,))
-            if row:
-                tag_id = row["id"]
-            else:
-                cursor = self._db.execute(
-                    "INSERT INTO tags (name) VALUES (?)", (name,),
-                )
-                tag_id = cursor.lastrowid
             self._db.execute(
-                "INSERT OR IGNORE INTO snippet_tags (snippet_id, tag_id) VALUES (?, ?)",
-                (snippet_id, tag_id),
+                "INSERT OR IGNORE INTO snippet_tags (snippet_id, name) VALUES (?, ?)",
+                (snippet_id, name),
             )
 
     def duplicate_snippet(self, snippet_id: int) -> int | None:
@@ -197,7 +187,6 @@ class SnippetManager:
     def list_all_tags(self) -> list[str]:
         """Return all tag names used by snippets."""
         rows = self._db.fetchall(
-            "SELECT DISTINCT t.name FROM tags t "
-            "JOIN snippet_tags st ON st.tag_id = t.id ORDER BY t.name",
+            "SELECT DISTINCT name FROM snippet_tags ORDER BY name"
         )
         return [r["name"] for r in rows]
