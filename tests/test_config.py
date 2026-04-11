@@ -34,7 +34,7 @@ def test_config_get_default_fallback(tmp_path: Path) -> None:
 def test_config_dotted_key_access(tmp_path: Path) -> None:
     """Dotted keys access nested values."""
     config = ConfigManager(data_dir=tmp_path)
-    assert config.get("appearance.theme") == "dark"
+    assert config.get("appearance.theme") == "auto"
     assert config.get("ssh.default_port") == 22
     assert config.get("sync.enabled") is False
 
