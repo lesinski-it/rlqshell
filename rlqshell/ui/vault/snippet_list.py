@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QMenu,
+    QMessageBox,
     QPushButton,
     QScrollArea,
     QVBoxLayout,
@@ -207,6 +208,12 @@ class SnippetListView(QWidget):
         self._package_filter.setFixedWidth(140)
         tb.addWidget(self._package_filter)
 
+        self._manage_pkg_btn = QPushButton("Packages \u25be")
+        self._manage_pkg_btn.setProperty("cssClass", "flat")
+        self._manage_pkg_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._manage_pkg_btn.clicked.connect(self._on_manage_packages)
+        tb.addWidget(self._manage_pkg_btn)
+
         add_btn = QPushButton("+ New")
         add_btn.setProperty("cssClass", "primary")
         add_btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -347,6 +354,76 @@ class SnippetListView(QWidget):
         for pkg in self._manager.list_packages():
             self._package_filter.addItem(pkg.name, pkg.id)
         self._package_filter.blockSignals(False)
+
+    def _select_package(self, package_id: int | None) -> None:
+        """Set the package filter combobox to the given package id."""
+        idx = self._package_filter.findData(package_id)
+        if idx >= 0:
+            self._package_filter.setCurrentIndex(idx)
+
+    def _on_manage_packages(self) -> None:
+        menu = QMenu(self)
+        new_action = menu.addAction("New package\u2026")
+        rename_action = menu.addAction("Rename package\u2026")
+        delete_action = menu.addAction("Delete package\u2026")
+
+        current_pkg_id = self._package_filter.currentData()
+        has_pkg = current_pkg_id is not None
+        rename_action.setEnabled(has_pkg)
+        delete_action.setEnabled(has_pkg)
+
+        pos = self._manage_pkg_btn.mapToGlobal(
+            self._manage_pkg_btn.rect().bottomLeft()
+        )
+        action = menu.exec(pos)
+
+        if action == new_action:
+            self._create_package()
+        elif action == rename_action and has_pkg:
+            self._rename_package(current_pkg_id)
+        elif action == delete_action and has_pkg:
+            self._delete_package(current_pkg_id)
+
+    def _create_package(self) -> None:
+        from rlqshell.ui.vault.snippet_package_editor import SnippetPackageEditor
+
+        dlg = SnippetPackageEditor(self._manager, parent=self)
+        if dlg.exec() != SnippetPackageEditor.DialogCode.Accepted:
+            return
+        self._refresh_packages()
+        if dlg.saved_id is not None:
+            self._select_package(dlg.saved_id)
+        self.refresh()
+
+    def _rename_package(self, package_id: int) -> None:
+        from rlqshell.ui.vault.snippet_package_editor import SnippetPackageEditor
+
+        dlg = SnippetPackageEditor(
+            self._manager, package_id=package_id, parent=self
+        )
+        if dlg.exec() != SnippetPackageEditor.DialogCode.Accepted:
+            return
+        self._refresh_packages()
+        self._select_package(package_id)
+        self.refresh()
+
+    def _delete_package(self, package_id: int) -> None:
+        name = self._package_filter.currentText()
+        reply = QMessageBox.question(
+            self,
+            "Delete Package",
+            f"Delete package \"{name}\"?\n\n"
+            "Snippets inside will remain (they become uncategorized). "
+            "This action cannot be undone.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        self._manager.delete_package(package_id)
+        self._refresh_packages()
+        self._select_package(None)
+        self.refresh()
 
     def refresh(self) -> None:
         """Rebuild the snippet list."""
