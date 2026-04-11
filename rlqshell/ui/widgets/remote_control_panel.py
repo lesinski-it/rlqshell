@@ -213,6 +213,7 @@ class RemoteDesktopContainer(QWidget):
     """Wraps a VNC/RDP display widget with a RemoteControlPanel."""
 
     fullscreen_requested = Signal()
+    reconnect_requested = Signal()
 
     _PANEL_WIDTH = 48
     _ANIM_MS = 180
@@ -231,6 +232,9 @@ class RemoteDesktopContainer(QWidget):
         self._panel.set_connection(conn, protocol)
         self._panel.fullscreen_requested.connect(self.fullscreen_requested)
         self._panel_visible = True
+        # Forward the display's reconnect_requested signal up to ConnectionsPage
+        if hasattr(display_widget, "reconnect_requested"):
+            display_widget.reconnect_requested.connect(self.reconnect_requested)
 
         # Floating Proxmox-style tab handle
         self._toggle_btn = QPushButton("\u2039", self)  # ‹
@@ -319,11 +323,26 @@ class RemoteDesktopContainer(QWidget):
         self._anim.start()
 
     # Proxy overlay API so ConnectionsPage can treat this like VNC/RDP widget
-    def show_overlay(self, text: str, color: str | None = None) -> None:
-        self._display.show_overlay(text, color)
+    def show_overlay(
+        self,
+        text: str,
+        color: str | None = None,
+        show_reconnect: bool = False,
+    ) -> None:
+        self._display.show_overlay(text, color, show_reconnect=show_reconnect)
 
     def clear_overlay(self) -> None:
         self._display.clear_overlay()
+
+    @property
+    def display_widget(self) -> QWidget:
+        return self._display
+
+    def set_connection(self, conn, protocol: str) -> None:
+        """Re-wire the panel and underlying display widget to a new connection."""
+        self._panel.set_connection(conn, protocol)
+        if hasattr(self._display, "set_connection"):
+            self._display.set_connection(conn)
 
     def setFocus(self) -> None:
         self._display.setFocus()

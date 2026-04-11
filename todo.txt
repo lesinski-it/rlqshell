@@ -1,8 +1,8 @@
 Connections (serial i terminal czy działa?)
 
-Autoupdate (Create MSI installer for Windows)
+(zrobione) Autoupdate (Create MSI installer for Windows)
 
-Izolaczja venv w CI by zależności się nie gryzły (Create MSI installer for Windows)
+(zrobione) Izolaczja venv w CI by zależności się nie gryzły (Create MSI installer for Windows)
 
 Co się stanie gdy nie podam hasła i zacznę nadpisywać hasła w identities?
 
@@ -12,5 +12,22 @@ Ustalenie licencji i metoda sprzedaży
 
 Widoki tabelek autoscale
 
+Instalator - w katalogu usera czy jako administrator na komputer
 
+Nazewnictwo funkcji (valut, keychain, itp.)
 
+motywy terminala -różne kolory tła i znaków
+
+About - licencja na update
+
+(zrobione) RDP - kolko myszki w dol rozlacza sesje
+
+(zrobione) Disconnect - wznawianie połączenia
+
+Wypchnięcie kodu na GITHUB
+
+migracja z mobaxterm / termus
+
+Usuwanie grup hostów
+
+Paczki snipety oraz tagi łączą się z tagami hostów

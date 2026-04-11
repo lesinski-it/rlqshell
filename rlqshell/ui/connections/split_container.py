@@ -390,9 +390,14 @@ class SplitContainer(QWidget):
 
     # -- Proxy API (so ConnectionsPage can treat us like a TerminalWidget) --
 
-    def show_overlay(self, text: str, color: str | None = None) -> None:
+    def show_overlay(
+        self,
+        text: str,
+        color: str | None = None,
+        show_reconnect: bool = False,
+    ) -> None:
         for panel in self._panels:
-            panel.terminal.show_overlay(text, color)
+            panel.terminal.show_overlay(text, color, show_reconnect=show_reconnect)
 
     def clear_overlay(self) -> None:
         for panel in self._panels:

@@ -21,7 +21,7 @@ from PySide6.QtGui import (
     QResizeEvent,
     QWheelEvent,
 )
-from PySide6.QtWidgets import QApplication, QMenu, QScrollBar, QWidget
+from PySide6.QtWidgets import QApplication, QMenu, QPushButton, QScrollBar, QWidget
 
 logger = logging.getLogger(__name__)
 
@@ -103,6 +103,7 @@ class TerminalWidget(QWidget):
     input_ready = Signal(bytes)  # data to send to the connection
     size_changed = Signal(int, int)  # cols, rows
     focus_gained = Signal()  # emitted when the terminal receives focus
+    reconnect_requested = Signal()  # user clicked the Reconnect button on the overlay
 
     def __init__(
         self,
@@ -190,6 +191,7 @@ class TerminalWidget(QWidget):
         # Overlay (status messages like "Connecting...", errors)
         self._overlay_text: str | None = None
         self._overlay_color: QColor = QColor("#a6adc8")
+        self._reconnect_btn: QPushButton | None = None
 
         # Dirty tracking
         self._dirty = True
@@ -211,20 +213,75 @@ class TerminalWidget(QWidget):
 
     # --- Public API ---
 
-    def show_overlay(self, text: str, color: str | None = None) -> None:
-        """Show a centered status overlay on the terminal."""
+    def show_overlay(
+        self,
+        text: str,
+        color: str | None = None,
+        show_reconnect: bool = False,
+    ) -> None:
+        """Show a centered status overlay on the terminal.
+
+        When ``show_reconnect`` is True, a clickable "Reconnect" button is
+        placed directly below the overlay text and emits
+        :attr:`reconnect_requested` when clicked.
+        """
         self._overlay_text = text
         if color:
             self._overlay_color = QColor(color)
         else:
             self._overlay_color = QColor("#a6adc8")
+        self._set_reconnect_btn_visible(show_reconnect)
         self.update()
 
     def clear_overlay(self) -> None:
         """Remove the status overlay."""
-        if self._overlay_text is not None:
+        had_text = self._overlay_text is not None
+        if had_text:
             self._overlay_text = None
+        if self._reconnect_btn is not None and self._reconnect_btn.isVisible():
+            self._reconnect_btn.hide()
+        if had_text:
             self.update()
+
+    def _set_reconnect_btn_visible(self, visible: bool) -> None:
+        if visible:
+            if self._reconnect_btn is None:
+                btn = QPushButton("Reconnect", self)
+                btn.setCursor(Qt.CursorShape.PointingHandCursor)
+                btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+                btn.setStyleSheet(
+                    "QPushButton { background: #89b4fa; color: #1e1e2e; "
+                    "border: none; border-radius: 6px; padding: 6px 20px; "
+                    "font-size: 12px; font-weight: 600; }"
+                    "QPushButton:hover { background: #b4befe; }"
+                    "QPushButton:pressed { background: #74c7ec; }"
+                )
+                btn.clicked.connect(self.reconnect_requested.emit)
+                self._reconnect_btn = btn
+            self._reconnect_btn.adjustSize()
+            self._position_reconnect_btn()
+            self._reconnect_btn.show()
+            self._reconnect_btn.raise_()
+        elif self._reconnect_btn is not None:
+            self._reconnect_btn.hide()
+
+    def _position_reconnect_btn(self) -> None:
+        btn = self._reconnect_btn
+        if btn is None or not self._overlay_text:
+            return
+        overlay_font = QFont(self._font)
+        overlay_font.setPointSize(14)
+        fm = QFontMetricsF(overlay_font)
+        text_height = fm.height()
+        pad_y = 12
+        overlay_bottom = (self.height() + text_height) / 2 + pad_y
+        bw = btn.width()
+        bh = btn.height()
+        bx = int((self.width() - bw) / 2)
+        by = int(overlay_bottom + 14)
+        # Keep button fully visible inside the widget
+        by = min(by, max(0, self.height() - bh - 8))
+        btn.move(bx, by)
 
     @Slot(bytes)
     def feed(self, data: bytes) -> None:
@@ -643,6 +700,8 @@ class TerminalWidget(QWidget):
         super().resizeEvent(event)
         self._layout_scrollbar()
         self._recompute_size()
+        if self._reconnect_btn is not None and self._reconnect_btn.isVisible():
+            self._position_reconnect_btn()
 
     def _recompute_size(self) -> None:
         if self._content_width() < 10 or self.height() < 10:

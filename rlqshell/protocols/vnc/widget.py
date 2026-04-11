@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 
-from PySide6.QtCore import QRect, QRectF, Qt, Slot
+from PySide6.QtCore import QRect, QRectF, Qt, Signal, Slot
 from PySide6.QtGui import (
     QColor,
     QFont,
@@ -16,7 +16,7 @@ from PySide6.QtGui import (
     QPaintEvent,
     QWheelEvent,
 )
-from PySide6.QtWidgets import QWidget
+from PySide6.QtWidgets import QPushButton, QWidget
 
 from rlqshell.protocols.vnc.connection import VNCConnection
 
@@ -67,6 +67,8 @@ _QT_TO_KEYSYM: dict[int, int] = {
 class VNCWidget(QWidget):
     """Widget that displays a VNC framebuffer and forwards input events."""
 
+    reconnect_requested = Signal()
+
     def __init__(
         self,
         connection: VNCConnection,
@@ -85,6 +87,7 @@ class VNCWidget(QWidget):
         self._overlay_text: str | None = None
         self._overlay_color = QColor("#a6adc8")
         self._bg_color = QColor("#1e1e2e")
+        self._reconnect_btn: QPushButton | None = None
 
         connection.frame_updated.connect(self._on_frame)
 
@@ -92,15 +95,79 @@ class VNCWidget(QWidget):
     # Public API (same interface as TerminalWidget for overlay)
     # ------------------------------------------------------------------
 
-    def show_overlay(self, text: str, color: str | None = None) -> None:
+    def set_connection(self, connection: VNCConnection) -> None:
+        """Swap the underlying VNC connection (used by reconnect)."""
+        old = self._conn
+        if old is not None:
+            try:
+                old.frame_updated.disconnect(self._on_frame)
+            except (RuntimeError, TypeError):
+                pass
+        self._conn = connection
+        connection.frame_updated.connect(self._on_frame)
+
+    def show_overlay(
+        self,
+        text: str,
+        color: str | None = None,
+        show_reconnect: bool = False,
+    ) -> None:
         self._overlay_text = text
         self._overlay_color = QColor(color) if color else QColor("#a6adc8")
+        self._set_reconnect_btn_visible(show_reconnect)
         self.update()
 
     def clear_overlay(self) -> None:
-        if self._overlay_text is not None:
+        had_text = self._overlay_text is not None
+        if had_text:
             self._overlay_text = None
+        if self._reconnect_btn is not None and self._reconnect_btn.isVisible():
+            self._reconnect_btn.hide()
+        if had_text:
             self.update()
+
+    def _set_reconnect_btn_visible(self, visible: bool) -> None:
+        if visible:
+            if self._reconnect_btn is None:
+                btn = QPushButton("Reconnect", self)
+                btn.setCursor(Qt.CursorShape.PointingHandCursor)
+                btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+                btn.setStyleSheet(
+                    "QPushButton { background: #89b4fa; color: #1e1e2e; "
+                    "border: none; border-radius: 6px; padding: 6px 20px; "
+                    "font-size: 12px; font-weight: 600; }"
+                    "QPushButton:hover { background: #b4befe; }"
+                    "QPushButton:pressed { background: #74c7ec; }"
+                )
+                btn.clicked.connect(self.reconnect_requested.emit)
+                self._reconnect_btn = btn
+            self._reconnect_btn.adjustSize()
+            self._position_reconnect_btn()
+            self._reconnect_btn.show()
+            self._reconnect_btn.raise_()
+        elif self._reconnect_btn is not None:
+            self._reconnect_btn.hide()
+
+    def _position_reconnect_btn(self) -> None:
+        btn = self._reconnect_btn
+        if btn is None or not self._overlay_text:
+            return
+        font = QFont("JetBrains Mono", 14)
+        fm = QFontMetricsF(font)
+        text_height = fm.height()
+        py = 12
+        overlay_bottom = (self.height() + text_height) / 2 + py
+        bw = btn.width()
+        bh = btn.height()
+        bx = int((self.width() - bw) / 2)
+        by = int(overlay_bottom + 14)
+        by = min(by, max(0, self.height() - bh - 8))
+        btn.move(bx, by)
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        if self._reconnect_btn is not None and self._reconnect_btn.isVisible():
+            self._position_reconnect_btn()
 
     # ------------------------------------------------------------------
     # Frame handling

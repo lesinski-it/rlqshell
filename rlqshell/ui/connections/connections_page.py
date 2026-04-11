@@ -205,6 +205,9 @@ class ConnectionsPage(QWidget):
         self._history_records: dict[str, int] = {}  # tab_id → history record id
         self._tab_host_ids: dict[str, int] = {}  # tab_id → host_id (for split-clone)
         self._split_sub_conns: dict[str, list[tuple[str, AbstractConnection]]] = {}  # tab_id → [(sub_id, conn)]
+        # Dialog-provided RDP creds kept only in memory so reconnect can reuse them
+        self._tab_rdp_creds: dict[str, tuple[str, str]] = {}  # tab_id → (username, password)
+        self._reconnecting: set[str] = set()  # tab_ids currently re-establishing
 
         self._pool.connection_count_changed.connect(self.connection_count_changed.emit)
         self._host_key_verify_signal.connect(lambda fn: fn())
@@ -294,6 +297,7 @@ class ConnectionsPage(QWidget):
         conn.error.connect(lambda msg, tid=tab_id: self._on_error(tid, msg))
         terminal.input_ready.connect(conn.send)
         terminal.size_changed.connect(conn.resize)
+        terminal.reconnect_requested.connect(lambda tid=tab_id: self._reconnect_tab(tid))
 
         self._sessions[tab_id] = (terminal, conn)
         self._pool.add(tab_id, conn, host_id=host.id)
@@ -330,9 +334,11 @@ class ConnectionsPage(QWidget):
         conn.connected.connect(container.clear_overlay)
         conn.disconnected.connect(lambda tid=tab_id: self._on_disconnected(tid))
         conn.error.connect(lambda msg, tid=tab_id: self._on_error(tid, msg))
+        container.reconnect_requested.connect(lambda tid=tab_id: self._reconnect_tab(tid))
 
         self._sessions[tab_id] = (container, conn)
         self._pool.add(tab_id, conn, host_id=host.id)
+        self._tab_host_ids[tab_id] = host.id
 
         self._tab_bar.add_tab(
             tab_id, label, protocol="VNC", color=host.color_label,
@@ -390,9 +396,13 @@ class ConnectionsPage(QWidget):
         conn.connected.connect(container.clear_overlay)
         conn.disconnected.connect(lambda tid=tab_id: self._on_disconnected(tid))
         conn.error.connect(lambda msg, tid=tab_id: self._on_error(tid, msg))
+        container.reconnect_requested.connect(lambda tid=tab_id: self._reconnect_tab(tid))
 
         self._sessions[tab_id] = (container, conn)
         self._pool.add(tab_id, conn, host_id=host.id)
+        self._tab_host_ids[tab_id] = host.id
+        # Cache creds so reconnect can reuse them without re-prompting
+        self._tab_rdp_creds[tab_id] = (username, password)
 
         self._tab_bar.add_tab(
             tab_id, label, protocol="RDP", color=host.color_label,
@@ -410,6 +420,7 @@ class ConnectionsPage(QWidget):
         try:
             await conn.connect()
             logger.info("Connection %s established", tab_id)
+            self._reconnecting.discard(tab_id)
             if self._history:
                 rec_id = self._history.record_connect(
                     host.id, host.label or host.address,
@@ -418,12 +429,15 @@ class ConnectionsPage(QWidget):
                 self._history_records[tab_id] = rec_id
         except Exception as exc:
             logger.error("Connection %s to %s failed: %s", tab_id, host.address, exc)
+            self._reconnecting.discard(tab_id)
             session = self._sessions.get(tab_id)
             if session:
                 widget, _ = session
+                can_reconnect = tab_id in self._tab_host_ids
                 widget.show_overlay(
                     f"Connection to {host.address} failed: {exc}",
                     color=Colors.DANGER,
+                    show_reconnect=can_reconnect,
                 )  # type: ignore[union-attr]
 
     def _verify_host_key(
@@ -548,6 +562,8 @@ class ConnectionsPage(QWidget):
             self._history.record_disconnect(rec_id)
         self._pool.remove(tab_id)
         self._tab_host_ids.pop(tab_id, None)
+        self._tab_rdp_creds.pop(tab_id, None)
+        self._reconnecting.discard(tab_id)
         self._tab_bar.remove_tab(tab_id)
 
         if not self._sessions:
@@ -565,10 +581,19 @@ class ConnectionsPage(QWidget):
         monitor = self._monitors.pop(tab_id, None)
         if monitor:
             monitor.stop()
+        if tab_id in self._reconnecting:
+            # Old connection's disconnected signal fires while we tear it down —
+            # ignore it so we don't overwrite the fresh "Connecting..." overlay.
+            return
         session = self._sessions.get(tab_id)
         if session:
             widget, _ = session
-            widget.show_overlay("Disconnected", color=Colors.WARNING)  # type: ignore[union-attr]
+            can_reconnect = tab_id in self._tab_host_ids
+            widget.show_overlay(  # type: ignore[union-attr]
+                "Disconnected",
+                color=Colors.WARNING,
+                show_reconnect=can_reconnect,
+            )
         rec_id = self._history_records.pop(tab_id, None)
         if rec_id and self._history:
             self._history.record_disconnect(rec_id)
@@ -579,10 +604,180 @@ class ConnectionsPage(QWidget):
 
     def _on_error(self, tab_id: str, message: str) -> None:
         logger.error("Connection %s error: %s", tab_id, message)
+        if tab_id in self._reconnecting:
+            return
         session = self._sessions.get(tab_id)
         if session:
             widget, _ = session
-            widget.show_overlay(f"Error: {message}", color=Colors.DANGER)  # type: ignore[union-attr]
+            can_reconnect = tab_id in self._tab_host_ids
+            widget.show_overlay(  # type: ignore[union-attr]
+                f"Error: {message}",
+                color=Colors.DANGER,
+                show_reconnect=can_reconnect,
+            )
+
+    # ------------------------------------------------------------------
+    # Reconnect
+    # ------------------------------------------------------------------
+
+    def _reconnect_tab(self, tab_id: str) -> None:
+        """Rebuild the connection for an existing tab (in place).
+
+        Triggered by the "Reconnect" button shown on the disconnect / error
+        overlay. Tears down the old connection, creates a fresh one for the
+        same host, and rewires all signals to the existing widget.
+        """
+        if tab_id in self._reconnecting:
+            return
+        session = self._sessions.get(tab_id)
+        if session is None:
+            return
+        host_id = self._tab_host_ids.get(tab_id)
+        if host_id is None:
+            logger.warning("Reconnect requested for %s but no host_id cached", tab_id)
+            return
+        host = self._host_manager.get_host(host_id)
+        if host is None:
+            logger.warning("Reconnect requested for %s but host %d not found", tab_id, host_id)
+            return
+
+        widget, old_conn = session
+        self._reconnecting.add(tab_id)
+
+        # Stop monitor for this tab (if any) and forget the old history record
+        monitor = self._monitors.pop(tab_id, None)
+        if monitor:
+            monitor.stop()
+        rec_id = self._history_records.pop(tab_id, None)
+        if rec_id and self._history:
+            self._history.record_disconnect(rec_id)
+
+        # Tear down the old connection and remove it from the pool
+        if old_conn is not None:
+            try:
+                old_conn.close()
+            except Exception:
+                logger.exception("Error closing old connection for %s", tab_id)
+        self._pool.remove(tab_id)
+
+        if host.protocol == "ssh":
+            self._reconnect_ssh(tab_id, widget, host)
+        elif host.protocol == "vnc":
+            self._reconnect_vnc(tab_id, widget, host)
+        elif host.protocol == "rdp":
+            self._reconnect_rdp(tab_id, widget, host)
+        else:
+            self._reconnecting.discard(tab_id)
+
+    def _reconnect_ssh(self, tab_id: str, terminal: QWidget, host: Host) -> None:
+        if not isinstance(terminal, TerminalWidget):
+            self._reconnecting.discard(tab_id)
+            return
+
+        password, pkey = self._resolve_credentials(host)
+        hk_callback = HostKeyVerifyCallback(self._verify_host_key)
+        cfg = self._config
+        conn = SSHConnection(
+            hostname=host.address,
+            port=host.ssh_port,
+            username=self._resolve_username(host),
+            password=password,
+            pkey=pkey,
+            keep_alive=host.ssh_keep_alive,
+            agent_forwarding=host.ssh_agent_forwarding,
+            compression=host.ssh_compression,
+            x11_forwarding=host.ssh_x11_forwarding,
+            timeout=int(cfg.get("ssh.connection_timeout", 15)) if cfg else 15,
+            term_type=str(cfg.get("ssh.terminal_type", "xterm-256color")) if cfg else "xterm-256color",
+            host_key_callback=hk_callback,
+        )
+
+        conn.data_received.connect(terminal.feed)
+        conn.connected.connect(terminal.clear_overlay)
+        conn.connected.connect(
+            lambda tid=tab_id, c=conn, h=host.address: self._start_monitor(tid, c, h)
+        )
+        conn.disconnected.connect(lambda tid=tab_id: self._on_disconnected(tid))
+        conn.error.connect(lambda msg, tid=tab_id: self._on_error(tid, msg))
+        terminal.input_ready.connect(conn.send)
+        terminal.size_changed.connect(conn.resize)
+
+        self._sessions[tab_id] = (terminal, conn)
+        self._pool.add(tab_id, conn, host_id=host.id)
+
+        terminal.show_overlay(f"Reconnecting to {host.address}:{host.ssh_port}...")
+        asyncio.ensure_future(self._connect_async(tab_id, conn, host))
+
+    def _reconnect_vnc(self, tab_id: str, container: QWidget, host: Host) -> None:
+        if not isinstance(container, RemoteDesktopContainer):
+            self._reconnecting.discard(tab_id)
+            return
+
+        password, _ = self._resolve_credentials(host)
+        conn = VNCConnection(
+            hostname=host.address,
+            port=host.vnc_port,
+            password=password,
+            view_only=host.vnc_view_only,
+        )
+
+        container.set_connection(conn, "vnc")
+        conn.connected.connect(container.clear_overlay)
+        conn.disconnected.connect(lambda tid=tab_id: self._on_disconnected(tid))
+        conn.error.connect(lambda msg, tid=tab_id: self._on_error(tid, msg))
+
+        self._sessions[tab_id] = (container, conn)
+        self._pool.add(tab_id, conn, host_id=host.id)
+
+        container.show_overlay(f"Reconnecting to {host.address}:{host.vnc_port}...")
+        asyncio.ensure_future(self._connect_async(tab_id, conn, host))
+
+    def _reconnect_rdp(self, tab_id: str, container: QWidget, host: Host) -> None:
+        if not isinstance(container, RemoteDesktopContainer):
+            self._reconnecting.discard(tab_id)
+            return
+
+        creds = self._tab_rdp_creds.get(tab_id)
+        if creds is None:
+            # Fall back to the host's configured identity
+            password, _ = self._resolve_credentials(host)
+            username = host.rdp_username
+            if not username and host.ssh_identity_id and self._credential_store.is_unlocked:
+                identity = self._credential_store.get_identity(host.ssh_identity_id)
+                if identity and identity.username:
+                    username = identity.username
+            if not username or not password:
+                self._reconnecting.discard(tab_id)
+                container.show_overlay(
+                    "Reconnect needs credentials — please reopen the tab.",
+                    color=Colors.DANGER,
+                    show_reconnect=False,
+                )
+                return
+        else:
+            username, password = creds
+
+        conn = RDPConnection(
+            hostname=host.address,
+            port=host.rdp_port,
+            username=username,
+            password=password,
+            domain=host.rdp_domain,
+            resolution=host.rdp_resolution,
+            color_depth=host.rdp_color_depth,
+            clipboard=host.rdp_clipboard,
+        )
+
+        container.set_connection(conn, "rdp")
+        conn.connected.connect(container.clear_overlay)
+        conn.disconnected.connect(lambda tid=tab_id: self._on_disconnected(tid))
+        conn.error.connect(lambda msg, tid=tab_id: self._on_error(tid, msg))
+
+        self._sessions[tab_id] = (container, conn)
+        self._pool.add(tab_id, conn, host_id=host.id)
+
+        container.show_overlay(f"Reconnecting to {host.address}:{host.rdp_port}...")
+        asyncio.ensure_future(self._connect_async(tab_id, conn, host))
 
     # ------------------------------------------------------------------
     # Server monitoring
