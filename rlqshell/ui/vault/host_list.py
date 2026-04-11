@@ -7,6 +7,7 @@ import logging
 from PySide6.QtCore import QMimeData, QPoint, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QDrag, QPainter, QPixmap
 from PySide6.QtWidgets import (
+    QDialog,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -412,6 +413,8 @@ class GroupSection(QWidget):
         self._header_widget.dragEnterEvent = self._header_drag_enter
         self._header_widget.dragLeaveEvent = self._header_drag_leave
         self._header_widget.dropEvent = self._header_drop
+        self._header_widget.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self._header_widget.customContextMenuRequested.connect(self._on_header_context_menu)
         header_layout = QHBoxLayout(self._header_widget)
         header_layout.setContentsMargins(0, 0, 8, 0)
         header_layout.setSpacing(0)
@@ -437,7 +440,7 @@ class GroupSection(QWidget):
         menu_btn.setStyleSheet(
             f"QPushButton {{ "
             f"  background: transparent; border: none; "
-            f"  color: {Colors.TEXT_MUTED}; font-size: 16px; font-weight: 700; "
+            f"  color: {Colors.TEXT_SECONDARY}; font-size: 16px; font-weight: 700; "
             f"}}"
             f"QPushButton:hover {{ color: {Colors.TEXT_PRIMARY}; "
             f"  background-color: {Colors.BG_HOVER}; border-radius: 4px; }}"
@@ -514,17 +517,25 @@ class GroupSection(QWidget):
         text = self._header_btn.text()
         self._header_btn.setText(f"  {arrow}  {group.name}  ({text.split('(')[-1]}")
 
-    def _on_menu(self) -> None:
+    def _open_menu(self, global_pos: QPoint) -> None:
         menu = QMenu(self)
         edit_action = menu.addAction("Edit Group")
         menu.addSeparator()
         delete_action = menu.addAction("Delete Group")
 
-        action = menu.exec(self.cursor().pos())
+        action = menu.exec(global_pos)
         if action == edit_action:
             self.edit_requested.emit(self._group.id or 0)
         elif action == delete_action:
             self.delete_requested.emit(self._group.id or 0)
+
+    def _on_menu(self) -> None:
+        # Triggered by the "⋯" button click — use cursor position.
+        self._open_menu(self.cursor().pos())
+
+    def _on_header_context_menu(self, pos: QPoint) -> None:
+        # Triggered by right-click on the header — map local to global.
+        self._open_menu(self._header_widget.mapToGlobal(pos))
 
     def _set_header_highlight(self, on: bool) -> None:
         if on == self._drop_highlight:
@@ -899,10 +910,27 @@ class HostListWidget(QWidget):
         editor.exec()
 
     def _delete_group(self, group_id: int) -> None:
-        # Move hosts from this group to ungrouped before deleting
+        from rlqshell.ui.vault.group_delete_dialog import GroupDeleteDialog
+
+        groups = self._host_manager.list_groups()
+        group = next((g for g in groups if g.id == group_id), None)
+        if group is None:
+            return
         hosts = self._host_manager.list_hosts(group_id=group_id)
+        other_groups = [g for g in groups if g.id != group_id]
+
+        dialog = GroupDeleteDialog(
+            group_name=group.name,
+            host_count=len(hosts),
+            other_groups=other_groups,
+            parent=self,
+        )
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        destination_id = dialog.destination_group_id  # None = ungrouped
         for h in hosts:
-            h.group_id = None
+            h.group_id = destination_id
             self._host_manager.update_host(h)
         self._host_manager.delete_group(group_id)
         self.refresh()
