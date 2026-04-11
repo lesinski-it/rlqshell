@@ -1,6 +1,12 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-    RLQShell MSI installer definition (WiX v6, per-machine)
+    RLQShell MSI installer definition (WiX v6, dual-purpose per-user / per-machine)
+
+    The user chooses the install scope at runtime via WixUI_Advanced's
+    InstallScopeDlg. With MSIINSTALLPERUSER=1 Windows Installer automatically
+    redirects ProgramFiles64Folder to %LocalAppData%\Programs and the
+    ProgramMenu/Desktop folders to their per-user variants, so no separate
+    directory tree is needed.
 
     Build-time variables (pass with `-d Name=Value`):
       Version        e.g. 0.1.0
@@ -15,7 +21,7 @@
            Manufacturer="RLQShell Contributors"
            Version="$(var.Version)"
            UpgradeCode="3ADAE43B-5083-4B8A-8844-5A51E7AD6174"
-           Scope="perMachine"
+           Scope="perUserOrMachine"
            Compressed="yes"
            Codepage="1250"
            Language="1045"
@@ -37,9 +43,25 @@
     <Property Id="ARPURLINFOABOUT" Value="https://update.lesinski.it/rlqshell/" />
     <Property Id="ARPNOMODIFY" Value="1" />
 
-    <!-- Install into %ProgramFiles%\RLQShell -->
+    <!--
+        Properties consumed by WixUI_Advanced's InstallScopeDlg.
+
+        ApplicationFolderName - folder name appended to the chosen base dir.
+        WixAppFolder          - default selection in the scope radio buttons:
+                                WixPerMachineFolder or WixPerUserFolder.
+                                Defaulting to per-machine matches the behaviour
+                                of older RLQShell builds.
+    -->
+    <Property Id="ApplicationFolderName" Value="RLQShell" />
+    <Property Id="WixAppFolder" Value="WixPerMachineFolder" />
+
+    <!--
+        Install into %ProgramFiles%\RLQShell (per-machine) or
+        %LocalAppData%\Programs\RLQShell (per-user). Windows Installer
+        rewrites ProgramFiles64Folder automatically when MSIINSTALLPERUSER=1.
+    -->
     <StandardDirectory Id="ProgramFiles64Folder">
-      <Directory Id="INSTALLFOLDER" Name="RLQShell" />
+      <Directory Id="APPLICATIONFOLDER" Name="RLQShell" />
     </StandardDirectory>
 
     <StandardDirectory Id="ProgramMenuFolder">
@@ -57,7 +79,7 @@
     -->
 
     <Component Id="MainExecutable"
-               Directory="INSTALLFOLDER"
+               Directory="APPLICATIONFOLDER"
                Guid="7A2E9C4D-1B56-4F8E-9A3B-C5D7E8F9A012">
       <File Id="RLQShellExe"
             Name="RLQShell.exe"
@@ -71,8 +93,8 @@
       <Shortcut Id="ApplicationStartMenuShortcut"
                 Name="RLQShell"
                 Description="Modern SSH client with private-cloud sync"
-                Target="[INSTALLFOLDER]RLQShell.exe"
-                WorkingDirectory="INSTALLFOLDER"
+                Target="[APPLICATIONFOLDER]RLQShell.exe"
+                WorkingDirectory="APPLICATIONFOLDER"
                 Icon="RLQShell.ico" />
       <RemoveFolder Id="CleanUpApplicationProgramsFolder"
                     Directory="ApplicationProgramsFolder"
@@ -91,8 +113,8 @@
       <Shortcut Id="ApplicationDesktopShortcut"
                 Name="RLQShell"
                 Description="Modern SSH client with private-cloud sync"
-                Target="[INSTALLFOLDER]RLQShell.exe"
-                WorkingDirectory="INSTALLFOLDER"
+                Target="[APPLICATIONFOLDER]RLQShell.exe"
+                WorkingDirectory="APPLICATIONFOLDER"
                 Icon="RLQShell.ico" />
       <RegistryValue Root="HKCU"
                      Key="Software\RLQShell\Installer"
@@ -105,16 +127,17 @@
     <!--
         Feature tree
 
-        Core is mandatory (AllowAbsent="no"). The two shortcut features default
-        to "installed locally" but can be unchecked in the WixUI_FeatureTree
-        dialog.
+        Core is mandatory (AllowAbsent="no"). The two shortcut sub-features
+        stay in the tree so they can still be toggled from the command line
+        via ADDLOCAL/REMOVE, even though WixUI_Advanced does not expose a
+        feature-selection dialog.
     -->
     <Feature Id="Core"
              Title="RLQShell (wymagane)"
              Description="Aplikacja główna RLQShell."
              Level="1"
              AllowAbsent="no"
-             ConfigurableDirectory="INSTALLFOLDER">
+             ConfigurableDirectory="APPLICATIONFOLDER">
       <ComponentRef Id="MainExecutable" />
 
       <Feature Id="StartMenuShortcutFeature"
@@ -132,8 +155,17 @@
       </Feature>
     </Feature>
 
-    <!-- UI with feature tree checkboxes -->
-    <ui:WixUI Id="WixUI_FeatureTree" />
+    <!--
+        WixUI_Advanced adds an InstallScopeDlg where the user picks
+        "install for me only" vs "install for all users". Requires
+        ApplicationFolderName + WixAppFolder above.
+
+        Trade-off: this dialog set does not include a feature-tree page, so
+        the shortcut sub-features install by default (Level=1). They can
+        still be toggled from the command line, e.g.
+            msiexec /i RLQShell-*.msi REMOVE=DesktopShortcutFeature
+    -->
+    <ui:WixUI Id="WixUI_Advanced" />
     <WixVariable Id="WixUILicenseRtf" Value="$(var.LicenseRtf)" />
 
   </Package>
