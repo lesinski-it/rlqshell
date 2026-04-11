@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
 
 from rlqshell.app.config import ConfigManager
 from rlqshell.app.constants import Colors
+from rlqshell.ui.settings.about_settings import AboutSettings
 from rlqshell.ui.settings.appearance_settings import AppearanceSettings
 from rlqshell.ui.settings.general_settings import GeneralSettings
 from rlqshell.ui.settings.keybinding_settings import KeybindingSettings
@@ -84,6 +85,7 @@ class SettingsDialog(QDialog):
         self._add_page("Key Bindings", KeybindingSettings(config))
         self._add_page("Sync", SyncSettings(config, sync_engine=sync_engine))
         self._add_page("Updates", UpdateSettings(config, update_manager=update_manager))
+        self._add_page("About", AboutSettings())
 
         self._sidebar.currentRowChanged.connect(self._stack.setCurrentIndex)
         self._sidebar.setCurrentRow(0)
