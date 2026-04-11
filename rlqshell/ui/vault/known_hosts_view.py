@@ -67,10 +67,15 @@ class KnownHostsView(QWidget):
             ["Hostname", "Port", "Key Type", "Fingerprint", ""]
         )
         header = self._table.horizontalHeader()
-        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
+        # Hostname / Port / Key Type auto-size to their text content so
+        # different font sizes don't truncate or leave dead space.
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        # Fingerprint absorbs remaining horizontal space (can't use
+        # stretchLastSection — the last column is the fixed-width action button).
         header.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
         header.setSectionResizeMode(4, QHeaderView.ResizeMode.Fixed)
-        self._table.setColumnWidth(2, 140)
         self._table.setColumnWidth(4, 90)
         self._table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self._table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)

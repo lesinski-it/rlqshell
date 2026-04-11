@@ -58,7 +58,7 @@ class TopBar(QWidget):
             ("Vault", self.PAGE_VAULT),
             ("Connections", self.PAGE_CONNECTIONS),
             ("SFTP", self.PAGE_SFTP),
-            ("Port Forwarding", self.PAGE_PORT_FORWARD),
+            ("Tunneling", self.PAGE_PORT_FORWARD),
         ]
         for label, index in nav_items:
             btn = self._create_nav_button(label, index)
@@ -124,7 +124,7 @@ class TopBar(QWidget):
     def set_tunnel_count(self, count: int) -> None:
         """Update the Port Forwarding button label with active tunnel count."""
         btn = self._nav_buttons[self.PAGE_PORT_FORWARD]
-        btn.setText(f"Port Forwarding ({count})" if count > 0 else "Port Forwarding")
+        btn.setText(f"Tunneling ({count})" if count > 0 else "Tunneling")
 
     @staticmethod
     def _nav_button_style(active: bool) -> str:

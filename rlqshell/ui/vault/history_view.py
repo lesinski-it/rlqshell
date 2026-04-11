@@ -78,7 +78,12 @@ class HistoryView(QWidget):
         self._table.setHorizontalHeaderLabels(
             ["Host", "Address", "Protocol", "Connected", "Duration"]
         )
-        self._table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        header = self._table.horizontalHeader()
+        # Size every column to its actual text content; Qt re-measures
+        # automatically when the font or data changes. Stretch the last
+        # visible section so any remaining horizontal space is consumed.
+        header.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+        header.setStretchLastSection(True)
         self._table.verticalHeader().setVisible(False)
         self._table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self._table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
