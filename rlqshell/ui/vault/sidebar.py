@@ -15,13 +15,13 @@ from rlqshell.app.constants import Colors, ICONS_DIR
 
 # (Display label, section key, icon filename)
 SECTIONS: list[tuple[str, str, str]] = [
-    ("Hosts",           "hosts",        "hosts.svg"),
-    ("Snippets",        "snippets",     "snippets.svg"),
-    ("Keychain",        "keychain",     "keychain.svg"),
-    ("Identities",      "identities",   "identities.svg"),
-    ("Known Hosts",     "known_hosts",  "known_hosts.svg"),
-    ("Port Forwarding", "port_forward", "port_forward.svg"),
-    ("History",         "history",      "history.svg"),
+    ("Servers",       "hosts",        "hosts.svg"),
+    ("Commands",      "snippets",     "snippets.svg"),
+    ("Keys",          "keychain",     "keychain.svg"),
+    ("Identities",    "identities",   "identities.svg"),
+    ("Trusted Hosts", "known_hosts",  "known_hosts.svg"),
+    ("Tunnels",       "port_forward", "port_forward.svg"),
+    ("Activity",      "history",      "history.svg"),
 ]
 
 
