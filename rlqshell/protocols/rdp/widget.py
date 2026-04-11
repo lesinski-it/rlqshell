@@ -244,8 +244,11 @@ class RDPWidget(QWidget):
         else:
             return
         # Per [MS-RDPBCGR] 2.2.8.1.1.3.1.1.3, DOWN/BUTTON flags are invalid in
-        # wheel events — pass is_pressed=False. At least one notch always.
-        steps = max(1, abs(delta) // 120)
+        # wheel events — pass is_pressed=False. The rotation field is counted
+        # in WHEEL_DELTA units (120 per notch on standard wheels), and Qt's
+        # angleDelta() already returns values in those units, so forward the
+        # raw magnitude rather than the notch count.
+        steps = max(1, abs(delta))
         try:
             asyncio.ensure_future(
                 self._conn._send_mouse(btn, x, y, False, steps),
