@@ -243,9 +243,12 @@ class RDPWidget(QWidget):
             btn = MOUSEBUTTON.MOUSEBUTTON_WHEEL_DOWN
         else:
             return
+        # Per [MS-RDPBCGR] 2.2.8.1.1.3.1.1.3, DOWN/BUTTON flags are invalid in
+        # wheel events — pass is_pressed=False. At least one notch always.
+        steps = max(1, abs(delta) // 120)
         try:
             asyncio.ensure_future(
-                self._conn._send_mouse(btn, x, y, True, abs(delta) // 120),
+                self._conn._send_mouse(btn, x, y, False, steps),
             )
         except RuntimeError:
             pass

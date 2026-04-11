@@ -95,6 +95,7 @@ class RDPConnection(AbstractConnection):
         self._connected = False
         self._stop_event = threading.Event()
         self._desktop_image: QImage | None = None
+        self._mcs_channel_id: int | None = None
 
     @property
     def is_connected(self) -> bool:
@@ -179,6 +180,15 @@ class RDPConnection(AbstractConnection):
         _, err = await self._rdp.connect()
         if err is not None:
             raise ConnectionError(f"RDP connect failed: {err}")
+
+        # Cache the MCS channel id for direct packet sending (wheel workaround).
+        # aardwolf keeps joined channels on a name-mangled attribute; we access
+        # it once here so _send_wheel_event doesn't have to on every scroll.
+        try:
+            channels = getattr(self._rdp, "_RDPConnection__joined_channels")
+            self._mcs_channel_id = channels["MCS"].channel_id
+        except (AttributeError, KeyError):
+            self._mcs_channel_id = None
 
         # Prepare desktop buffer
         self._desktop_image = QImage(width, height, QImage.Format.Format_RGB32)
@@ -269,11 +279,78 @@ class RDPConnection(AbstractConnection):
                 pass
 
     async def _send_mouse(self, button, x: int, y: int, is_pressed: bool, steps: int = 0) -> None:
-        if self._rdp and self._connected:
+        if not (self._rdp and self._connected):
+            return
+        from aardwolf.commons.queuedata.constants import MOUSEBUTTON
+        # Route wheel events through our own sender — aardwolf's send_mouse has
+        # a bug where WHEEL_DOWN omits PTRFLAGS.WHEEL, producing a malformed
+        # packet that Windows RDP servers reject by disconnecting the session.
+        if button in (MOUSEBUTTON.MOUSEBUTTON_WHEEL_UP, MOUSEBUTTON.MOUSEBUTTON_WHEEL_DOWN):
+            negative = button == MOUSEBUTTON.MOUSEBUTTON_WHEEL_DOWN
             try:
-                await self._rdp.send_mouse(button, x, y, is_pressed, steps)
+                await self._send_wheel_event(x, y, steps or 1, negative)
             except Exception:
-                pass
+                logger.debug("Wheel event send failed", exc_info=True)
+            return
+        try:
+            await self._rdp.send_mouse(button, x, y, is_pressed, steps)
+        except Exception:
+            pass
+
+    async def _send_wheel_event(self, x: int, y: int, magnitude: int, negative: bool) -> None:
+        """Send a vertical mouse wheel event directly to bypass aardwolf's buggy send_mouse.
+
+        Per [MS-RDPBCGR] 2.2.8.1.1.3.1.1.3, every vertical wheel event must set
+        PTRFLAGS_WHEEL (0x0200); PTRFLAGS_WHEEL_NEGATIVE (0x0100) is merely a
+        modifier bit that indicates the rotation value is negative. aardwolf's
+        send_mouse sets only WHEEL_NEGATIVE for scroll-down, so the server sees
+        a packet with no WHEEL flag and (because is_pressed=True in the caller)
+        PTRFLAGS_DOWN without any BUTTON flag — a protocol violation that
+        causes Windows to drop the RDP session. We construct the packet here
+        with the correct flag set and no stray DOWN/BUTTON bits.
+        """
+        if x < 0 or y < 0:
+            return
+        if self._mcs_channel_id is None:
+            return
+
+        from aardwolf.protocol.pdu.input.mouse import PTRFLAGS, TS_POINTER_EVENT
+        from aardwolf.protocol.T128.inputeventpdu import (
+            TS_INPUT_EVENT,
+            TS_INPUT_PDU_DATA,
+            TS_SHAREDATAHEADER,
+        )
+        from aardwolf.protocol.T128.security import SEC_HDR_FLAG, TS_SECURITY_HEADER
+        from aardwolf.protocol.T128.share import PDUTYPE2, STREAM_TYPE
+
+        data_hdr = TS_SHAREDATAHEADER()
+        data_hdr.shareID = 0x103EA
+        data_hdr.streamID = STREAM_TYPE.MED
+        data_hdr.pduType2 = PDUTYPE2.INPUT
+
+        # Encode rotation as a 9-bit signed value inside WheelRotationMask.
+        # Positive: raw magnitude (0x001..0x0FF).
+        # Negative: 9-bit two's complement; bit 0x0100 (WHEEL_NEGATIVE) is set.
+        magnitude = max(1, min(int(magnitude), 0xFF))
+        rotation = (0x200 - magnitude) & 0x1FF if negative else magnitude
+
+        mouse = TS_POINTER_EVENT()
+        mouse.pointerFlags = PTRFLAGS.WHEEL | rotation
+        mouse.xPos = x
+        mouse.yPos = y
+
+        cli_input = TS_INPUT_PDU_DATA()
+        cli_input.slowPathInputEvents.append(TS_INPUT_EVENT.from_input(mouse))
+
+        sec_hdr = None
+        if self._rdp.cryptolayer is not None:
+            sec_hdr = TS_SECURITY_HEADER()
+            sec_hdr.flags = SEC_HDR_FLAG.ENCRYPT
+            sec_hdr.flagsHi = 0
+
+        await self._rdp.handle_out_data(
+            cli_input, sec_hdr, data_hdr, None, self._mcs_channel_id, False,
+        )
 
     # ------------------------------------------------------------------
     # AbstractConnection interface (not used for RDP)
