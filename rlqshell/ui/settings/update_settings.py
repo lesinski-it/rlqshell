@@ -40,7 +40,7 @@ class UpdateSettings(QWidget):
         layout.setContentsMargins(24, 24, 24, 24)
         layout.setSpacing(16)
 
-        title = QLabel("Aktualizacje")
+        title = QLabel("Updates")
         title.setStyleSheet(
             f"font-size: 18px; font-weight: 700; color: {Colors.TEXT_PRIMARY}; "
             f"background: transparent;"
@@ -48,8 +48,8 @@ class UpdateSettings(QWidget):
         layout.addWidget(title)
 
         desc = QLabel(
-            "Automatyczne sprawdzanie nowych wersji. "
-            "Aktualizacje są pobierane i weryfikowane przed instalacją."
+            "Automatically check for new versions. "
+            "Updates are downloaded and verified before installation."
         )
         desc.setWordWrap(True)
         desc.setStyleSheet(
@@ -65,7 +65,7 @@ class UpdateSettings(QWidget):
         self._auto_check = ToggleSwitch()
         self._auto_check.set_checked(config.get("updates.auto_check", True))
         self._auto_check.toggled.connect(self._on_auto_check_toggled)
-        form.addRow(self._make_label("Automatyczne sprawdzanie"), self._auto_check)
+        form.addRow(self._make_label("Automatic checking"), self._auto_check)
 
         self._interval = QSpinBox()
         self._interval.setRange(1, 168)
@@ -79,12 +79,12 @@ class UpdateSettings(QWidget):
             f"}}"
         )
         self._interval.valueChanged.connect(self._on_interval_changed)
-        form.addRow(self._make_label("Interwał sprawdzania"), self._interval)
+        form.addRow(self._make_label("Check interval"), self._interval)
 
         layout.addLayout(form)
 
         # current version
-        ver_label = QLabel(f"Aktualna wersja: v{APP_VERSION}")
+        ver_label = QLabel(f"Current version: v{APP_VERSION}")
         ver_label.setStyleSheet(
             f"font-size: 12px; color: {Colors.TEXT_MUTED}; "
             f"background: transparent; margin-top: 8px;"
@@ -94,7 +94,7 @@ class UpdateSettings(QWidget):
         # check now row
         check_row = QHBoxLayout()
 
-        self._check_btn = QPushButton("Sprawdź teraz")
+        self._check_btn = QPushButton("Check now")
         self._check_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._check_btn.setStyleSheet(
             f"QPushButton {{ "
@@ -146,7 +146,7 @@ class UpdateSettings(QWidget):
         if not self._updater:
             return
         self._check_btn.setEnabled(False)
-        self._check_btn.setText("Sprawdzanie…")
+        self._check_btn.setText("Checking…")
         self._status.setText("")
         self._status.setStyleSheet(
             f"font-size: 12px; color: {Colors.TEXT_MUTED}; background: transparent;"
@@ -155,9 +155,9 @@ class UpdateSettings(QWidget):
         async def _do_check() -> None:
             result = await self._updater.check_for_update()
             self._check_btn.setEnabled(True)
-            self._check_btn.setText("Sprawdź teraz")
+            self._check_btn.setText("Check now")
             if result is None and not self._updater._checking:
-                self._status.setText("Aktualna wersja jest najnowsza.")
+                self._status.setText("You are running the latest version.")
                 self._status.setStyleSheet(
                     f"font-size: 12px; color: {Colors.SUCCESS}; background: transparent;"
                 )
@@ -166,21 +166,21 @@ class UpdateSettings(QWidget):
 
     def _on_update_found(self, manifest: dict) -> None:
         version = manifest.get("version", "?")
-        self._status.setText(f"Dostępna aktualizacja: v{version}")
+        self._status.setText(f"Update available: v{version}")
         self._status.setStyleSheet(
             f"font-size: 12px; color: {Colors.ACCENT}; font-weight: 600; "
             f"background: transparent;"
         )
         self._check_btn.setEnabled(True)
-        self._check_btn.setText("Sprawdź teraz")
+        self._check_btn.setText("Check now")
 
     def _on_check_failed(self, error: str) -> None:
-        self._status.setText(f"Błąd: {error}")
+        self._status.setText(f"Error: {error}")
         self._status.setStyleSheet(
             f"font-size: 12px; color: {Colors.DANGER}; background: transparent;"
         )
         self._check_btn.setEnabled(True)
-        self._check_btn.setText("Sprawdź teraz")
+        self._check_btn.setText("Check now")
 
     # -- helpers --
 

@@ -6,7 +6,7 @@ from pathlib import Path
 APP_NAME = "RLQShell"
 APP_VERSION = "0.2.20"
 ORGANIZATION_NAME = "RLQShell"
-APP_AUTHOR = "Rafał Lesiński"
+APP_AUTHOR = "Ravczy"
 APP_AUTHOR_WEBSITE = "https://www.lesinski.it"
 APP_DONATE_URL = "https://lesinski.it/donate"
 APP_PRIVACY_URL = "https://lesinski.it/privacy-policy"

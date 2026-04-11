@@ -39,7 +39,7 @@ class UpdateDialog(QDialog):
         self._forced = forced
         self._downloaded_path: str | None = None
 
-        self.setWindowTitle("Aktualizacja")
+        self.setWindowTitle("Update")
         self.setFixedSize(480, 340)
         self.setStyleSheet(f"QDialog {{ background-color: {Colors.BG_PRIMARY}; }}")
 
@@ -55,7 +55,7 @@ class UpdateDialog(QDialog):
         layout.setSpacing(12)
 
         # title
-        title = QLabel("Dostępna aktualizacja")
+        title = QLabel("Update available")
         title.setStyleSheet(
             f"font-size: 16px; font-weight: 700; color: {Colors.TEXT_PRIMARY}; "
             f"background: transparent;"
@@ -76,7 +76,7 @@ class UpdateDialog(QDialog):
         notes = manifest.get("release_notes", "")
         meta_parts = []
         if release_date:
-            meta_parts.append(f"Data wydania: {release_date}")
+            meta_parts.append(f"Release date: {release_date}")
         if notes:
             meta_parts.append(notes)
         if meta_parts:
@@ -91,7 +91,7 @@ class UpdateDialog(QDialog):
         dl_info = update_manager.get_download_info(manifest)
         if dl_info:
             size_mb = dl_info.get("size_bytes", 0) / (1024 * 1024)
-            size_label = QLabel(f"Rozmiar: {size_mb:.1f} MB")
+            size_label = QLabel(f"Size: {size_mb:.1f} MB")
             size_label.setStyleSheet(
                 f"font-size: 12px; color: {Colors.TEXT_MUTED}; background: transparent;"
             )
@@ -129,7 +129,7 @@ class UpdateDialog(QDialog):
         btn_row = QHBoxLayout()
         btn_row.addStretch()
 
-        self._later_btn = QPushButton("Później")
+        self._later_btn = QPushButton("Later")
         self._later_btn.setStyleSheet(
             f"background: transparent; color: {Colors.TEXT_MUTED}; "
             f"border: 1px solid {Colors.BORDER}; border-radius: 6px; "
@@ -140,7 +140,7 @@ class UpdateDialog(QDialog):
             self._later_btn.setVisible(False)
         btn_row.addWidget(self._later_btn)
 
-        self._update_btn = QPushButton("Aktualizuj teraz")
+        self._update_btn = QPushButton("Update now")
         self._update_btn.setDefault(True)
         self._update_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._update_btn.setStyleSheet(
@@ -151,7 +151,7 @@ class UpdateDialog(QDialog):
         self._update_btn.clicked.connect(self._on_update_clicked)
         btn_row.addWidget(self._update_btn)
 
-        self._install_btn = QPushButton("Zainstaluj i uruchom ponownie")
+        self._install_btn = QPushButton("Install and restart")
         self._install_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._install_btn.setStyleSheet(
             f"background-color: {Colors.SUCCESS}; color: #ffffff; "
@@ -173,12 +173,12 @@ class UpdateDialog(QDialog):
 
     def _on_update_clicked(self) -> None:
         self._update_btn.setEnabled(False)
-        self._update_btn.setText("Pobieranie…")
+        self._update_btn.setText("Downloading…")
         self._later_btn.setEnabled(False)
         self._progress.setVisible(True)
         self._progress.setValue(0)
         self._status.setVisible(True)
-        self._status.setText("Pobieranie aktualizacji…")
+        self._status.setText("Downloading update…")
         asyncio.ensure_future(self._updater.download_update(self._manifest))
 
     def _on_progress(self, downloaded: int, total: int) -> None:
@@ -187,26 +187,26 @@ class UpdateDialog(QDialog):
             self._progress.setValue(pct)
             mb_done = downloaded / (1024 * 1024)
             mb_total = total / (1024 * 1024)
-            self._status.setText(f"Pobieranie… {mb_done:.1f} / {mb_total:.1f} MB")
+            self._status.setText(f"Downloading… {mb_done:.1f} / {mb_total:.1f} MB")
         else:
             mb_done = downloaded / (1024 * 1024)
-            self._status.setText(f"Pobieranie… {mb_done:.1f} MB")
+            self._status.setText(f"Downloading… {mb_done:.1f} MB")
 
     def _on_download_complete(self, path: str) -> None:
         self._downloaded_path = path
         self._progress.setValue(100)
-        self._status.setText("Pobieranie zakończone — gotowe do instalacji.")
+        self._status.setText("Download complete — ready to install.")
         self._update_btn.setVisible(False)
         self._install_btn.setVisible(True)
         self._later_btn.setEnabled(True)
 
     def _on_download_failed(self, error: str) -> None:
-        self._status.setText(f"Błąd: {error}")
+        self._status.setText(f"Error: {error}")
         self._status.setStyleSheet(
             f"font-size: 12px; color: {Colors.DANGER}; background: transparent;"
         )
         self._update_btn.setEnabled(True)
-        self._update_btn.setText("Spróbuj ponownie")
+        self._update_btn.setText("Retry")
         self._later_btn.setEnabled(True)
         self._progress.setVisible(False)
 
@@ -220,10 +220,10 @@ class UpdateDialog(QDialog):
             import sys
             if sys.platform == "linux":
                 self._status.setText(
-                    f"Zainstaluj ręcznie: sudo dpkg -i {self._downloaded_path}"
+                    f"Install manually: sudo dpkg -i {self._downloaded_path}"
                 )
             else:
-                self._status.setText("Nie udało się uruchomić instalatora.")
+                self._status.setText("Failed to launch the installer.")
             self._status.setStyleSheet(
                 f"font-size: 12px; color: {Colors.WARNING}; background: transparent;"
             )
