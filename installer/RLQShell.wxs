@@ -57,10 +57,14 @@
 
     <!--
         Install into %ProgramFiles%\RLQShell (per-machine) or
-        %LocalAppData%\Programs\RLQShell (per-user). Windows Installer
-        rewrites ProgramFiles64Folder automatically when MSIINSTALLPERUSER=1.
+        %LocalAppData%\Programs\RLQShell (per-user).
+
+        WixUI_Advanced's SetApplicationFolder custom action resolves
+        WixPerMachineFolder → ProgramFilesFolder, so the directory tree
+        must use ProgramFilesFolder (not ProgramFiles64Folder). On x64
+        Windows with an x64 package both resolve to C:\Program Files.
     -->
-    <StandardDirectory Id="ProgramFiles64Folder">
+    <StandardDirectory Id="ProgramFilesFolder">
       <Directory Id="APPLICATIONFOLDER" Name="RLQShell" />
     </StandardDirectory>
 

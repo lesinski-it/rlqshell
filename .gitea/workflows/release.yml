@@ -102,7 +102,7 @@ jobs:
           }
           Write-Output "WiX version: $(wix --version)"
 
-          # UI extension required by WixUI_FeatureTree
+          # UI extension required by WixUI_Advanced (install-scope dialog)
           $extList = (wix extension list -g) 2>&1 | Out-String
           if ($extList -notmatch "WixToolset.UI.wixext") {
             Write-Output "Installing WixToolset.UI.wixext $wixWanted..."
