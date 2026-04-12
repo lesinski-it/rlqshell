@@ -318,12 +318,26 @@ class SyncSettings(QWidget):
             self._sync_engine.cloud_folder = folder
 
     def _on_conflict_changed(self, text: str) -> None:
+        from rlqshell.core.sync.conflict_resolver import ConflictStrategy
+
         reverse_map = {
             "Last Write Wins": "last_write_wins",
             "Keep Local": "keep_local",
             "Keep Remote": "keep_remote",
         }
-        self._save("sync.conflict_strategy", reverse_map.get(text, "last_write_wins"))
+        key = reverse_map.get(text, "last_write_wins")
+        self._save("sync.conflict_strategy", key)
+
+        # Update the live resolver so the next sync uses the new strategy
+        if self._sync_engine and hasattr(self._sync_engine, "_resolver"):
+            strategy_enum = {
+                "last_write_wins": ConflictStrategy.LAST_WRITE_WINS,
+                "keep_local": ConflictStrategy.KEEP_LOCAL,
+                "keep_remote": ConflictStrategy.KEEP_REMOTE,
+            }
+            self._sync_engine._resolver.strategy = strategy_enum.get(
+                key, ConflictStrategy.LAST_WRITE_WINS
+            )
 
     def _on_proxy_toggled(self, enabled: bool) -> None:
         self._save("sync.proxy_enabled", enabled)
