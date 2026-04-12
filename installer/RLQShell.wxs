@@ -164,13 +164,42 @@
         "install for me only" vs "install for all users". Requires
         ApplicationFolderName + WixAppFolder above.
 
-        Trade-off: this dialog set does not include a feature-tree page, so
-        the shortcut sub-features install by default (Level=1). They can
-        still be toggled from the command line, e.g.
-            msiexec /i RLQShell-*.msi REMOVE=DesktopShortcutFeature
+        Known WiX bug (wixtoolset/discussions#7624): the built-in
+        WixSetDefaultPerMachineFolder / WixSetDefaultPerUserFolder custom
+        actions resolve APPLICATIONFOLDER incorrectly when
+        Scope="perUserOrMachine". The two CustomActions below run
+        immediately after and override with the correct paths.
     -->
     <ui:WixUI Id="WixUI_Advanced" />
     <WixVariable Id="WixUILicenseRtf" Value="$(var.LicenseRtf)" />
+
+    <!-- Fix broken folder resolution in WixUI_Advanced (per-machine) -->
+    <CustomAction Id="FixPerMachineFolder"
+                  Property="APPLICATIONFOLDER"
+                  Value="[ProgramFilesFolder][ApplicationFolderName]" />
+
+    <!-- Fix broken folder resolution in WixUI_Advanced (per-user) -->
+    <CustomAction Id="FixPerUserFolder"
+                  Property="APPLICATIONFOLDER"
+                  Value="[LocalAppDataFolder]Programs\[ApplicationFolderName]" />
+
+    <InstallUISequence>
+      <Custom Action="FixPerMachineFolder"
+              After="WixSetDefaultPerMachineFolder"
+              Condition="WixAppFolder = &quot;WixPerMachineFolder&quot;" />
+      <Custom Action="FixPerUserFolder"
+              After="WixSetDefaultPerUserFolder"
+              Condition="WixAppFolder = &quot;WixPerUserFolder&quot;" />
+    </InstallUISequence>
+
+    <InstallExecuteSequence>
+      <Custom Action="FixPerMachineFolder"
+              After="WixSetDefaultPerMachineFolder"
+              Condition="WixAppFolder = &quot;WixPerMachineFolder&quot;" />
+      <Custom Action="FixPerUserFolder"
+              After="WixSetDefaultPerUserFolder"
+              Condition="WixAppFolder = &quot;WixPerUserFolder&quot;" />
+    </InstallExecuteSequence>
 
   </Package>
 </Wix>

@@ -8,6 +8,7 @@ import threading
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Generator
+from uuid import uuid4
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +25,7 @@ CREATE TABLE IF NOT EXISTS vaults (
 
 CREATE TABLE IF NOT EXISTS groups_ (
     id INTEGER PRIMARY KEY,
+    sync_uuid TEXT UNIQUE,
     vault_id INTEGER NOT NULL REFERENCES vaults(id) ON DELETE CASCADE,
     parent_id INTEGER REFERENCES groups_(id) ON DELETE CASCADE,
     name TEXT NOT NULL,
@@ -32,19 +34,24 @@ CREATE TABLE IF NOT EXISTS groups_ (
     default_identity_id INTEGER,
     default_jump_host_id INTEGER,
     sort_order INTEGER DEFAULT 0,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE IF NOT EXISTS tags (
     id INTEGER PRIMARY KEY,
+    sync_uuid TEXT UNIQUE,
     name TEXT NOT NULL UNIQUE,
-    color TEXT NOT NULL DEFAULT '#6c757d'
+    color TEXT NOT NULL DEFAULT '#6c757d',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 -- === HOSTS ===
 
 CREATE TABLE IF NOT EXISTS hosts (
     id INTEGER PRIMARY KEY,
+    sync_uuid TEXT UNIQUE,
     vault_id INTEGER NOT NULL REFERENCES vaults(id) ON DELETE CASCADE,
     group_id INTEGER REFERENCES groups_(id) ON DELETE SET NULL,
     label TEXT NOT NULL,
@@ -96,6 +103,9 @@ CREATE TABLE IF NOT EXISTS hosts (
 CREATE TABLE IF NOT EXISTS host_tags (
     host_id INTEGER REFERENCES hosts(id) ON DELETE CASCADE,
     tag_id INTEGER REFERENCES tags(id) ON DELETE CASCADE,
+    sync_uuid TEXT UNIQUE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (host_id, tag_id)
 );
 
@@ -220,6 +230,13 @@ CREATE TABLE IF NOT EXISTS sync_state (
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS sync_tombstones (
+    entity_type TEXT NOT NULL,
+    sync_uuid TEXT NOT NULL,
+    deleted_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (entity_type, sync_uuid)
+);
+
 -- === INDEXES ===
 
 CREATE INDEX IF NOT EXISTS idx_hosts_vault ON hosts(vault_id);
@@ -229,6 +246,11 @@ CREATE INDEX IF NOT EXISTS idx_hosts_address ON hosts(address);
 CREATE INDEX IF NOT EXISTS idx_snippets_vault ON snippets(vault_id);
 CREATE INDEX IF NOT EXISTS idx_connection_history_date ON connection_history(connected_at);
 CREATE INDEX IF NOT EXISTS idx_command_history_cmd ON command_history(command);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_groups_sync_uuid ON groups_(sync_uuid);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_tags_sync_uuid ON tags(sync_uuid);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_hosts_sync_uuid ON hosts(sync_uuid);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_host_tags_sync_uuid ON host_tags(sync_uuid);
+CREATE INDEX IF NOT EXISTS idx_tombstones_deleted_at ON sync_tombstones(deleted_at);
 """
 
 
@@ -333,6 +355,92 @@ class Database:
             finally:
                 conn.execute("PRAGMA foreign_keys = ON")
                 conn.isolation_level = prev_isolation
+
+        # Sync v2 metadata for record-level cloud sync.
+        def _table_cols(table: str) -> set[str]:
+            return {r[1] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+
+        def _add_column_if_missing(table: str, col_name: str, col_ddl: str) -> None:
+            if col_name not in _table_cols(table):
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {col_ddl}")
+
+        _add_column_if_missing("groups_", "sync_uuid", "sync_uuid TEXT")
+        _add_column_if_missing("groups_", "updated_at", "updated_at TIMESTAMP")
+        _add_column_if_missing("tags", "sync_uuid", "sync_uuid TEXT")
+        _add_column_if_missing("tags", "created_at", "created_at TIMESTAMP")
+        _add_column_if_missing("tags", "updated_at", "updated_at TIMESTAMP")
+        _add_column_if_missing("hosts", "sync_uuid", "sync_uuid TEXT")
+        _add_column_if_missing("host_tags", "sync_uuid", "sync_uuid TEXT")
+        _add_column_if_missing("host_tags", "created_at", "created_at TIMESTAMP")
+        _add_column_if_missing("host_tags", "updated_at", "updated_at TIMESTAMP")
+
+        conn.execute(
+            "UPDATE groups_ "
+            "SET updated_at = COALESCE(updated_at, created_at, CURRENT_TIMESTAMP)"
+        )
+        conn.execute(
+            "UPDATE tags "
+            "SET created_at = COALESCE(created_at, CURRENT_TIMESTAMP), "
+            "updated_at = COALESCE(updated_at, created_at, CURRENT_TIMESTAMP)"
+        )
+        conn.execute(
+            "UPDATE host_tags "
+            "SET created_at = COALESCE(created_at, CURRENT_TIMESTAMP), "
+            "updated_at = COALESCE(updated_at, created_at, CURRENT_TIMESTAMP)"
+        )
+
+        for row in conn.execute(
+            "SELECT id FROM groups_ WHERE sync_uuid IS NULL OR sync_uuid = ''"
+        ).fetchall():
+            conn.execute(
+                "UPDATE groups_ SET sync_uuid=? WHERE id=?",
+                (str(uuid4()), row[0]),
+            )
+
+        for row in conn.execute(
+            "SELECT id FROM tags WHERE sync_uuid IS NULL OR sync_uuid = ''"
+        ).fetchall():
+            conn.execute(
+                "UPDATE tags SET sync_uuid=? WHERE id=?",
+                (str(uuid4()), row[0]),
+            )
+
+        for row in conn.execute(
+            "SELECT id FROM hosts WHERE sync_uuid IS NULL OR sync_uuid = ''"
+        ).fetchall():
+            conn.execute(
+                "UPDATE hosts SET sync_uuid=? WHERE id=?",
+                (str(uuid4()), row[0]),
+            )
+
+        for row in conn.execute(
+            "SELECT host_id, tag_id FROM host_tags "
+            "WHERE sync_uuid IS NULL OR sync_uuid = ''"
+        ).fetchall():
+            conn.execute(
+                "UPDATE host_tags SET sync_uuid=? WHERE host_id=? AND tag_id=?",
+                (str(uuid4()), row[0], row[1]),
+            )
+
+        conn.execute(
+            """CREATE TABLE IF NOT EXISTS sync_tombstones (
+                entity_type TEXT NOT NULL,
+                sync_uuid TEXT NOT NULL,
+                deleted_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (entity_type, sync_uuid)
+            )"""
+        )
+
+        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_groups_sync_uuid ON groups_(sync_uuid)")
+        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_tags_sync_uuid ON tags(sync_uuid)")
+        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_hosts_sync_uuid ON hosts(sync_uuid)")
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_host_tags_sync_uuid ON host_tags(sync_uuid)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_tombstones_deleted_at ON sync_tombstones(deleted_at)"
+        )
+        conn.commit()
 
     def _get_connection(self) -> sqlite3.Connection:
         if self._connection is None:

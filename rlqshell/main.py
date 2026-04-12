@@ -169,6 +169,7 @@ def main() -> None:
 
     sync_engine = SyncEngine(
         app.config.data_dir,
+        db,
         sync_state,
         ConflictResolver(conflict_strategy),
         cloud_folder=app.config.get("sync.cloud_folder", "/RLQShell"),

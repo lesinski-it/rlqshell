@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime
+from uuid import uuid4
 
 from rlqshell.core.database import Database
 from rlqshell.core.models.host import Group, Host, Tag
@@ -17,13 +18,28 @@ class HostManager:
     def __init__(self, db: Database) -> None:
         self._db = db
 
+    @staticmethod
+    def _new_sync_uuid() -> str:
+        return str(uuid4())
+
+    def _record_tombstone(self, entity_type: str, sync_uuid: str | None) -> None:
+        if not sync_uuid:
+            return
+        deleted_at = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+        self._db.execute(
+            "INSERT OR REPLACE INTO sync_tombstones (entity_type, sync_uuid, deleted_at) "
+            "VALUES (?, ?, ?)",
+            (entity_type, sync_uuid, deleted_at),
+        )
+
     # --- Hosts ---
 
     def create_host(self, host: Host) -> int:
         """Insert a new host and return its id."""
+        sync_uuid = host.sync_uuid or self._new_sync_uuid()
         cursor = self._db.execute(
             """INSERT INTO hosts (
-                vault_id, group_id, label, address, protocol,
+                sync_uuid, vault_id, group_id, label, address, protocol,
                 ssh_port, ssh_identity_id, ssh_host_chain_id,
                 ssh_startup_snippet_id, ssh_keep_alive,
                 ssh_agent_forwarding, ssh_x11_forwarding, ssh_compression,
@@ -36,6 +52,7 @@ class HostManager:
                 terminal_theme, terminal_font, terminal_font_size,
                 notes, color_label, sort_order
             ) VALUES (
+                ?, ?, ?, ?, ?, ?,
                 ?, ?, ?, ?, ?,
                 ?, ?, ?,
                 ?, ?,
@@ -50,7 +67,12 @@ class HostManager:
                 ?, ?, ?
             )""",
             (
-                host.vault_id, host.group_id, host.label, host.address, host.protocol,
+                sync_uuid,
+                host.vault_id,
+                host.group_id,
+                host.label,
+                host.address,
+                host.protocol,
                 host.ssh_port, host.ssh_identity_id, host.ssh_host_chain_id,
                 host.ssh_startup_snippet_id, host.ssh_keep_alive,
                 host.ssh_agent_forwarding, host.ssh_x11_forwarding, host.ssh_compression,
@@ -74,14 +96,14 @@ class HostManager:
         """Update sort_order for hosts based on their position in the list."""
         for idx, host_id in enumerate(ordered_ids):
             self._db.execute(
-                "UPDATE hosts SET sort_order = ? WHERE id = ?",
+                "UPDATE hosts SET sort_order = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
                 (idx, host_id),
             )
 
     def move_host_to_group(self, host_id: int, group_id: int | None) -> None:
         """Move a host to a different group."""
         self._db.execute(
-            "UPDATE hosts SET group_id = ? WHERE id = ?",
+            "UPDATE hosts SET group_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
             (group_id, host_id),
         )
 
@@ -123,6 +145,8 @@ class HostManager:
 
     def delete_host(self, host_id: int) -> None:
         """Delete a host by id."""
+        row = self._db.fetchone("SELECT sync_uuid FROM hosts WHERE id=?", (host_id,))
+        self._record_tombstone("hosts", row["sync_uuid"] if row else None)
         self._db.execute("DELETE FROM hosts WHERE id=?", (host_id,))
 
     def get_host(self, host_id: int) -> Host | None:
@@ -192,12 +216,14 @@ class HostManager:
 
     def create_group(self, group: Group) -> int:
         """Insert a new group and return its id."""
+        sync_uuid = group.sync_uuid or self._new_sync_uuid()
         cursor = self._db.execute(
-            """INSERT INTO groups_ (vault_id, parent_id, name, icon, color,
-                default_identity_id, default_jump_host_id, sort_order)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            """INSERT INTO groups_ (
+                sync_uuid, vault_id, parent_id, name, icon, color,
+                default_identity_id, default_jump_host_id, sort_order
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
-                group.vault_id, group.parent_id, group.name, group.icon,
+                sync_uuid, group.vault_id, group.parent_id, group.name, group.icon,
                 group.color, group.default_identity_id, group.default_jump_host_id,
                 group.sort_order,
             ),
@@ -209,7 +235,8 @@ class HostManager:
         self._db.execute(
             """UPDATE groups_ SET
                 vault_id=?, parent_id=?, name=?, icon=?, color=?,
-                default_identity_id=?, default_jump_host_id=?, sort_order=?
+                default_identity_id=?, default_jump_host_id=?, sort_order=?,
+                updated_at=CURRENT_TIMESTAMP
             WHERE id=?""",
             (
                 group.vault_id, group.parent_id, group.name, group.icon,
@@ -220,6 +247,8 @@ class HostManager:
 
     def delete_group(self, group_id: int) -> None:
         """Delete a group by id."""
+        row = self._db.fetchone("SELECT sync_uuid FROM groups_ WHERE id=?", (group_id,))
+        self._record_tombstone("groups", row["sync_uuid"] if row else None)
         self._db.execute("DELETE FROM groups_ WHERE id=?", (group_id,))
 
     def list_groups(self, vault_id: int = 1) -> list[Group]:
@@ -234,30 +263,58 @@ class HostManager:
 
     def create_tag(self, tag: Tag) -> int:
         """Insert a new tag and return its id."""
+        sync_uuid = tag.sync_uuid or self._new_sync_uuid()
         cursor = self._db.execute(
-            "INSERT INTO tags (name, color) VALUES (?, ?)",
-            (tag.name, tag.color),
+            "INSERT INTO tags (sync_uuid, name, color) VALUES (?, ?, ?)",
+            (sync_uuid, tag.name, tag.color),
         )
         return cursor.lastrowid  # type: ignore[return-value]
 
     def delete_tag(self, tag_id: int) -> None:
         """Delete a tag by id."""
+        row = self._db.fetchone("SELECT sync_uuid FROM tags WHERE id=?", (tag_id,))
+        self._record_tombstone("tags", row["sync_uuid"] if row else None)
         self._db.execute("DELETE FROM tags WHERE id=?", (tag_id,))
 
     def list_tags(self) -> list[Tag]:
         """List all tags."""
         rows = self._db.fetchall("SELECT * FROM tags ORDER BY name")
-        return [Tag(id=r["id"], name=r["name"], color=r["color"]) for r in rows]
+        return [
+            Tag(
+                id=r["id"],
+                sync_uuid=r["sync_uuid"],
+                name=r["name"],
+                color=r["color"],
+                created_at=r["created_at"],
+                updated_at=r["updated_at"],
+            )
+            for r in rows
+        ]
 
     def add_tag_to_host(self, host_id: int, tag_id: int) -> None:
         """Associate a tag with a host."""
-        self._db.execute(
-            "INSERT OR IGNORE INTO host_tags (host_id, tag_id) VALUES (?, ?)",
+        existing = self._db.fetchone(
+            "SELECT sync_uuid FROM host_tags WHERE host_id=? AND tag_id=?",
             (host_id, tag_id),
+        )
+        if existing:
+            self._db.execute(
+                "UPDATE host_tags SET updated_at=CURRENT_TIMESTAMP WHERE host_id=? AND tag_id=?",
+                (host_id, tag_id),
+            )
+            return
+        self._db.execute(
+            "INSERT INTO host_tags (host_id, tag_id, sync_uuid) VALUES (?, ?, ?)",
+            (host_id, tag_id, self._new_sync_uuid()),
         )
 
     def remove_tag_from_host(self, host_id: int, tag_id: int) -> None:
         """Remove a tag from a host."""
+        row = self._db.fetchone(
+            "SELECT sync_uuid FROM host_tags WHERE host_id=? AND tag_id=?",
+            (host_id, tag_id),
+        )
+        self._record_tombstone("host_tags", row["sync_uuid"] if row else None)
         self._db.execute(
             "DELETE FROM host_tags WHERE host_id=? AND tag_id=?",
             (host_id, tag_id),
@@ -272,7 +329,17 @@ class HostManager:
             ORDER BY t.name""",
             (host_id,),
         )
-        return [Tag(id=r["id"], name=r["name"], color=r["color"]) for r in rows]
+        return [
+            Tag(
+                id=r["id"],
+                sync_uuid=r["sync_uuid"],
+                name=r["name"],
+                color=r["color"],
+                created_at=r["created_at"],
+                updated_at=r["updated_at"],
+            )
+            for r in rows
+        ]
 
     # --- Conversions ---
 
@@ -281,6 +348,7 @@ class HostManager:
         """Convert a sqlite3.Row to a Host dataclass."""
         return Host(
             id=row["id"],
+            sync_uuid=row["sync_uuid"],
             vault_id=row["vault_id"],
             group_id=row["group_id"],
             label=row["label"],
@@ -330,6 +398,7 @@ class HostManager:
         """Convert a sqlite3.Row to a Group dataclass."""
         return Group(
             id=row["id"],
+            sync_uuid=row["sync_uuid"],
             vault_id=row["vault_id"],
             parent_id=row["parent_id"],
             name=row["name"],
@@ -339,4 +408,5 @@ class HostManager:
             default_jump_host_id=row["default_jump_host_id"],
             sort_order=row["sort_order"],
             created_at=row["created_at"],
+            updated_at=row["updated_at"],
         )

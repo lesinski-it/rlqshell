@@ -11,8 +11,11 @@ class Tag:
     """A colored label for organizing hosts."""
 
     id: int | None = None
+    sync_uuid: str | None = None
     name: str = ""
     color: str = "#6c757d"
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
 
 
 @dataclass
@@ -20,6 +23,7 @@ class Group:
     """A collection of hosts with optional inherited settings."""
 
     id: int | None = None
+    sync_uuid: str | None = None
     vault_id: int = 1
     parent_id: int | None = None
     name: str = ""
@@ -29,6 +33,7 @@ class Group:
     default_jump_host_id: int | None = None
     sort_order: int = 0
     created_at: datetime | None = None
+    updated_at: datetime | None = None
 
 
 @dataclass
@@ -36,6 +41,7 @@ class Host:
     """A defined connection target."""
 
     id: int | None = None
+    sync_uuid: str | None = None
     vault_id: int = 1
     group_id: int | None = None
     label: str = ""
