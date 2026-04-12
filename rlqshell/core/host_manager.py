@@ -53,7 +53,6 @@ class HostManager:
                 notes, color_label, sort_order
             ) VALUES (
                 ?, ?, ?, ?, ?, ?,
-                ?, ?, ?, ?, ?,
                 ?, ?, ?,
                 ?, ?,
                 ?, ?, ?,
