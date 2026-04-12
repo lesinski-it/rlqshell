@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from uuid import uuid4
@@ -22,6 +22,7 @@ class SyncMeta:
     device_name: str = ""
     app_version: str = ""
     db_hash: str = ""
+    file_hashes: dict[str, str] | None = None
 
 
 class SyncState:
@@ -84,7 +85,12 @@ class SyncState:
                 sha.update(chunk)
         return sha.hexdigest()
 
-    def build_meta(self, app_version: str, db_hash: str) -> SyncMeta:
+    def build_meta(
+        self,
+        app_version: str,
+        db_hash: str,
+        file_hashes: dict[str, str] | None = None,
+    ) -> SyncMeta:
         import platform
 
         return SyncMeta(
@@ -93,6 +99,7 @@ class SyncState:
             device_name=platform.node(),
             app_version=app_version,
             db_hash=db_hash,
+            file_hashes=file_hashes,
         )
 
     def _load(self) -> None:

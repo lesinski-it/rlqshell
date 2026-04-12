@@ -85,14 +85,14 @@ def main() -> None:
     from rlqshell.core.connection_pool import ConnectionPool
     from rlqshell.core.credential_store import CredentialStore
     from rlqshell.core.database import Database
-    from rlqshell.core.keychain import Keychain
     from rlqshell.core.history_manager import HistoryManager
+    from rlqshell.core.keychain import Keychain
     from rlqshell.core.known_hosts import KnownHostsManager
     from rlqshell.core.port_forward_manager import PortForwardManager
-    from rlqshell.core.tunnel_engine import TunnelEngine
     from rlqshell.core.sync.conflict_resolver import ConflictResolver
     from rlqshell.core.sync.sync_engine import SyncEngine
     from rlqshell.core.sync.sync_state import SyncState
+    from rlqshell.core.tunnel_engine import TunnelEngine
     from rlqshell.core.vault import Vault
 
     splash.update_progress(50, "Loading UI modules\u2026")
@@ -151,10 +151,60 @@ def main() -> None:
     tunnel_engine = TunnelEngine(vault.hosts, credential_store, keychain)
 
     # Cloud sync
+    from rlqshell.core.sync.conflict_resolver import ConflictStrategy
+    from rlqshell.core.sync.token_store import SyncTokenStore
+
     sync_state = SyncState(app.config.data_dir / "sync_state.json")
-    sync_engine = SyncEngine(
-        app.config.data_dir, sync_state, ConflictResolver(),
+
+    # Resolve conflict strategy from config
+    _strategy_map = {
+        "last_write_wins": ConflictStrategy.LAST_WRITE_WINS,
+        "keep_local": ConflictStrategy.KEEP_LOCAL,
+        "keep_remote": ConflictStrategy.KEEP_REMOTE,
+    }
+    conflict_strategy = _strategy_map.get(
+        app.config.get("sync.conflict_strategy", "last_write_wins"),
+        ConflictStrategy.LAST_WRITE_WINS,
     )
+
+    sync_engine = SyncEngine(
+        app.config.data_dir,
+        sync_state,
+        ConflictResolver(conflict_strategy),
+        cloud_folder=app.config.get("sync.cloud_folder", "/RLQShell"),
+    )
+
+    # Token persistence
+    token_store = SyncTokenStore(db, credential_store)
+
+    # Restore provider from saved tokens
+    saved_provider_name = app.config.get("sync.provider", "None")
+    if saved_provider_name and saved_provider_name != "None" and credential_store.is_unlocked:
+        tokens = token_store.load_tokens(saved_provider_name)
+        if tokens:
+            try:
+                proxy_url = None
+                if app.config.get("sync.proxy_enabled", False):
+                    proxy_url = app.config.get("sync.proxy_url", "").strip() or None
+                from rlqshell.ui.settings.sync_settings import _create_provider
+
+                provider = _create_provider(saved_provider_name, proxy_url)
+                provider.set_tokens(tokens[0], tokens[1])
+                sync_engine.set_provider(provider)
+                sync_engine.set_token_save_callback(
+                    lambda a, r: token_store.save_tokens(saved_provider_name, a, r)
+                )
+
+                if app.config.get("sync.auto_sync", False):
+                    interval = app.config.get("sync.interval_minutes", 5)
+                    sync_engine.start_auto_sync(interval)
+
+                if app.config.get("sync.sync_on_start", False):
+                    asyncio.ensure_future(sync_engine.sync())
+
+                logger.info("Cloud sync restored for %s", saved_provider_name)
+            except Exception:
+                logger.warning("Could not restore cloud sync provider", exc_info=True)
 
     from rlqshell.ui.main_window import MainWindow
     window = MainWindow()
@@ -299,7 +349,11 @@ def main() -> None:
     update_manager.update_available.connect(_on_update_available)
 
     def _open_settings():
-        dlg = SettingsDialog(app.config, window, sync_engine=sync_engine, update_manager=update_manager)
+        dlg = SettingsDialog(
+            app.config, window, sync_engine=sync_engine,
+            update_manager=update_manager, token_store=token_store,
+            credential_store=credential_store,
+        )
         dlg.terminal_settings_changed.connect(connections_page.refresh_terminal_config)
         dlg.appearance_settings_changed.connect(
             lambda: window.apply_appearance(app.config)
@@ -332,7 +386,7 @@ def main() -> None:
         palette.set_items(_build_palette_items())
         palette.show_palette()
 
-    from PySide6.QtGui import QShortcut, QKeySequence
+    from PySide6.QtGui import QKeySequence, QShortcut
 
     shortcut_palette = QShortcut(QKeySequence("Ctrl+K"), window)
     shortcut_palette.activated.connect(_show_palette)
@@ -392,13 +446,41 @@ def main() -> None:
     window.top_bar.settings_requested.disconnect()
     window.top_bar.settings_requested.connect(_open_settings)
 
+    # Sync conflict → toast notification
+    def _on_sync_conflict(filename: str, winner: str) -> None:
+        from rlqshell.ui.widgets.toast import ToastManager
+
+        ToastManager.instance().show_toast(
+            f"Sync conflict: {filename} — kept {winner} version",
+            toast_type="warning",
+        )
+
+    sync_engine.sync_conflict.connect(_on_sync_conflict)
+
     # Cleanup on close
     def _cleanup() -> None:
         logger.info("Cleaning up resources…")
         update_manager.stop()
         tunnel_engine.stop_all()
         connection_pool.close_all()
-        sync_engine.stop_auto_sync()
+
+        # Sync on close
+        if (
+            app.config.get("sync.sync_on_close", False)
+            and sync_engine.provider
+            and sync_engine.provider.is_authenticated()
+        ):
+            try:
+                loop.run_until_complete(sync_engine.sync())
+            except Exception:
+                logger.warning("Sync on close failed", exc_info=True)
+
+        # Shutdown sync engine (close provider session)
+        try:
+            loop.run_until_complete(sync_engine.shutdown())
+        except Exception:
+            pass
+
         credential_store.lock()
         vault.close()
 

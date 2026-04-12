@@ -4,14 +4,13 @@ from __future__ import annotations
 
 import logging
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
     QDialog,
     QHBoxLayout,
     QListWidget,
     QListWidgetItem,
     QStackedWidget,
-    QVBoxLayout,
 )
 
 from rlqshell.app.config import ConfigManager
@@ -33,12 +32,22 @@ class SettingsDialog(QDialog):
     terminal_settings_changed = Signal()
     appearance_settings_changed = Signal()
 
-    def __init__(self, config: ConfigManager, parent=None, sync_engine=None, update_manager=None) -> None:
+    def __init__(
+        self,
+        config: ConfigManager,
+        parent=None,
+        sync_engine=None,
+        update_manager=None,
+        token_store=None,
+        credential_store=None,
+    ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Settings")
         self.setFixedSize(700, 500)
         self._sync_engine = sync_engine
         self._update_manager = update_manager
+        self._token_store = token_store
+        self._credential_store = credential_store
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -83,7 +92,10 @@ class SettingsDialog(QDialog):
         appearance_page.appearance_settings_changed.connect(self.appearance_settings_changed)
         self._add_page("Appearance", appearance_page)
         self._add_page("Key Bindings", KeybindingSettings(config))
-        self._add_page("Sync", SyncSettings(config, sync_engine=sync_engine))
+        self._add_page("Sync", SyncSettings(
+            config, sync_engine=sync_engine,
+            token_store=token_store, credential_store=credential_store,
+        ))
         self._add_page("Updates", UpdateSettings(config, update_manager=update_manager))
         self._add_page("About", AboutSettings())
 

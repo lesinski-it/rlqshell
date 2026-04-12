@@ -38,7 +38,11 @@
         "auto_sync": false,
         "auto_sync_interval": 300,
         "sync_on_start": false,
-        "sync_on_close": false
+        "sync_on_close": false,
+        "cloud_folder": "/RLQShell",
+        "conflict_strategy": "last_write_wins",
+        "proxy_enabled": false,
+        "proxy_url": ""
     },
     "updates": {
         "auto_check": true,

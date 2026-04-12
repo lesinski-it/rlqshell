@@ -6,6 +6,8 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import datetime
 
+import aiohttp
+
 
 @dataclass
 class RemoteFileInfo:
@@ -19,6 +21,22 @@ class RemoteFileInfo:
 
 class AbstractCloudProvider(ABC):
     """Interface for cloud storage providers (OneDrive, Google Drive, Dropbox)."""
+
+    def __init__(self, proxy_url: str | None = None) -> None:
+        self._proxy_url = proxy_url
+        self._session: aiohttp.ClientSession | None = None
+
+    async def _get_session(self) -> aiohttp.ClientSession:
+        """Return a cached aiohttp session (lazy-created)."""
+        if self._session is None or self._session.closed:
+            self._session = aiohttp.ClientSession()
+        return self._session
+
+    async def close(self) -> None:
+        """Close the underlying HTTP session."""
+        if self._session and not self._session.closed:
+            await self._session.close()
+            self._session = None
 
     @abstractmethod
     async def authenticate(self, auth_code: str) -> bool:
@@ -35,6 +53,14 @@ class AbstractCloudProvider(ABC):
     @abstractmethod
     def get_auth_url(self) -> str:
         """Get the OAuth2 authorization URL."""
+
+    @abstractmethod
+    def get_tokens(self) -> tuple[str, str] | None:
+        """Return (access_token, refresh_token) or None if not authenticated."""
+
+    @abstractmethod
+    def set_tokens(self, access_token: str, refresh_token: str) -> None:
+        """Restore tokens from encrypted storage."""
 
     @abstractmethod
     async def upload_file(self, local_path: str, remote_path: str) -> None:
@@ -64,3 +90,8 @@ class AbstractCloudProvider(ABC):
     @abstractmethod
     def provider_name(self) -> str:
         """Human-readable provider name."""
+
+    @property
+    @abstractmethod
+    def connectivity_check_url(self) -> str:
+        """URL used to verify internet connectivity for this provider."""
