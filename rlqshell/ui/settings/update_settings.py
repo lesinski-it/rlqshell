@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QTimer, Qt
 from PySide6.QtWidgets import (
     QFormLayout,
     QHBoxLayout,
@@ -163,15 +163,23 @@ class UpdateSettings(QWidget):
                     f"font-size: 12px; color: {Colors.SUCCESS}; background: transparent;"
                 )
             elif result is not None:
-                from rlqshell.ui.dialogs.update_dialog import UpdateDialog
-
-                forced = result.get("_forced", False)
-                dlg = UpdateDialog(
-                    result, self._updater, forced=forced, parent=self.window()
-                )
-                dlg.exec()
+                # Schedule the dialog on the next Qt event-loop tick so it
+                # runs outside this async task — otherwise dlg.exec() nests
+                # a Qt event loop inside the running task and any subsequent
+                # asyncio.ensure_future (e.g. download_update) raises
+                # "Cannot enter into task while another task is being executed".
+                QTimer.singleShot(0, lambda r=result: self._show_update_dialog(r))
 
         asyncio.ensure_future(_do_check())
+
+    def _show_update_dialog(self, manifest: dict) -> None:
+        from rlqshell.ui.dialogs.update_dialog import UpdateDialog
+
+        forced = manifest.get("_forced", False)
+        dlg = UpdateDialog(
+            manifest, self._updater, forced=forced, parent=self.window()
+        )
+        dlg.exec()
 
     def _on_update_found(self, manifest: dict) -> None:
         version = manifest.get("version", "?")
