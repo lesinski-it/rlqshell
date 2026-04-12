@@ -461,6 +461,38 @@ def main() -> None:
 
     sync_engine.sync_conflict.connect(_on_sync_conflict)
 
+    def _on_sync_completed(stats: dict) -> None:
+        from rlqshell.ui.widgets.toast import ToastManager
+
+        added = stats.get("added", 0)
+        updated = stats.get("updated", 0)
+        deleted = stats.get("deleted", 0)
+        pushed = stats.get("pushed", 0)
+
+        parts = []
+        if added:
+            parts.append(f"+{added} added")
+        if updated:
+            parts.append(f"~{updated} updated")
+        if deleted:
+            parts.append(f"-{deleted} deleted")
+        if pushed:
+            parts.append(f"↑{pushed} pushed")
+
+        if parts:
+            ToastManager.instance().show_toast(
+                f"Sync: {', '.join(parts)}",
+                toast_type="success",
+            )
+        else:
+            ToastManager.instance().show_toast(
+                "Sync: everything up to date",
+                toast_type="info",
+                duration_ms=2000,
+            )
+
+    sync_engine.sync_completed.connect(_on_sync_completed)
+
     # Cleanup on close
     async def _async_cleanup() -> None:
         """Run async cleanup tasks (sync on close, provider shutdown)."""

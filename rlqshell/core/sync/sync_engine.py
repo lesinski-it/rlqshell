@@ -79,7 +79,7 @@ class SyncEngine(QObject):
     """Orchestrates sync: pull → merge → push (per-file bidirectional)."""
 
     sync_started = Signal()
-    sync_completed = Signal()
+    sync_completed = Signal(dict)  # {"added": int, "updated": int, "deleted": int}
     sync_error = Signal(str)
     sync_conflict = Signal(str, str)  # filename, winner
     sync_skipped = Signal(str)  # reason
@@ -185,7 +185,7 @@ class SyncEngine(QObject):
             self._backup_local()
 
             self._prune_local_tombstones()
-            records_changed = await self._sync_records_v2()
+            sync_stats = await self._sync_records_v2()
 
             local_hashes: dict[str, str] = {
                 "rlqshell.db": SyncState.compute_file_hash(self._data_dir / "rlqshell.db")
@@ -244,6 +244,7 @@ class SyncEngine(QObject):
 
             local_hashes["rlqshell.db"] = SyncState.compute_file_hash(self._data_dir / "rlqshell.db")
 
+            records_changed = any(v > 0 for v in sync_stats.values())
             if any_pushed or any_pulled or records_changed or not remote_meta:
                 meta = self._state.build_meta(
                     APP_VERSION,
@@ -268,7 +269,7 @@ class SyncEngine(QObject):
                 local_hashes.get("rlqshell.db", ""),
             )
             logger.info("Sync completed successfully")
-            self.sync_completed.emit()
+            self.sync_completed.emit(sync_stats)
 
         except Exception as exc:
             logger.exception("Sync failed")
@@ -277,21 +278,29 @@ class SyncEngine(QObject):
         finally:
             self._syncing = False
 
-    async def _sync_records_v2(self) -> bool:
+    async def _sync_records_v2(self) -> dict[str, int]:
+        """Sync records and return stats: {added, updated, deleted, pushed}."""
         local_payload = self._sanitize_payload(self._export_local_records())
         remote_payload = self._sanitize_payload(await self._download_remote_records())
         merged_payload = self._merge_payloads(local_payload, remote_payload)
 
-        changed = False
+        stats: dict[str, int] = {
+            "added": 0, "updated": 0, "deleted": 0, "pushed": 0,
+        }
         if self._payload_hash(local_payload) != self._payload_hash(merged_payload):
-            self._apply_merged_payload(merged_payload)
-            changed = True
+            stats = self._apply_merged_payload(merged_payload)
 
         if self._payload_hash(remote_payload) != self._payload_hash(merged_payload):
+            for entity in ("groups", "tags", "hosts", "host_tags"):
+                remote_uuids = {
+                    r["sync_uuid"] for r in remote_payload.get(entity, [])
+                }
+                for r in merged_payload.get(entity, []):
+                    if r["sync_uuid"] not in remote_uuids:
+                        stats["pushed"] += 1
             await self._upload_remote_records(merged_payload)
-            changed = True
 
-        return changed
+        return stats
 
     @staticmethod
     def _parse_ts(value: Any) -> datetime:
@@ -565,8 +574,9 @@ class SyncEngine(QObject):
 
         return merged
 
-    def _apply_merged_payload(self, payload: dict[str, Any]) -> None:
-        """Write merged records into the local database."""
+    def _apply_merged_payload(self, payload: dict[str, Any]) -> dict[str, int]:
+        """Write merged records into the local database. Returns stats."""
+        stats = {"added": 0, "updated": 0, "deleted": 0, "pushed": 0}
         with self._db.connection() as conn:
             # --- Groups ---
             # Build sync_uuid -> local id map
@@ -593,6 +603,7 @@ class SyncEngine(QObject):
                             g["sync_uuid"],
                         ),
                     )
+                    stats["updated"] += 1
                 else:
                     conn.execute(
                         """INSERT INTO groups_
@@ -607,6 +618,7 @@ class SyncEngine(QObject):
                             g.get("sort_order", 0), g["updated_at"],
                         ),
                     )
+                    stats["added"] += 1
 
             # Resolve parent_id after all groups exist
             for g in payload.get("groups", []):
@@ -630,6 +642,7 @@ class SyncEngine(QObject):
             for uuid in tomb_group_uuids:
                 if uuid in local_groups:
                     conn.execute("DELETE FROM groups_ WHERE sync_uuid=?", (uuid,))
+                    stats["deleted"] += 1
 
             # --- Tags ---
             local_tags = {
@@ -645,11 +658,13 @@ class SyncEngine(QObject):
                         "UPDATE tags SET name=?, color=?, updated_at=? WHERE sync_uuid=?",
                         (t["name"], t["color"], t["updated_at"], t["sync_uuid"]),
                     )
+                    stats["updated"] += 1
                 else:
                     conn.execute(
                         "INSERT INTO tags (sync_uuid, name, color, updated_at) VALUES (?, ?, ?, ?)",
                         (t["sync_uuid"], t["name"], t["color"], t["updated_at"]),
                     )
+                    stats["added"] += 1
 
             tomb_tag_uuids = {
                 t["sync_uuid"]
@@ -659,6 +674,7 @@ class SyncEngine(QObject):
             for uuid in tomb_tag_uuids:
                 if uuid in local_tags:
                     conn.execute("DELETE FROM tags WHERE sync_uuid=?", (uuid,))
+                    stats["deleted"] += 1
 
             # --- Hosts ---
             local_hosts = {
@@ -699,6 +715,7 @@ class SyncEngine(QObject):
                         f"UPDATE hosts SET {set_clause}, updated_at=? WHERE sync_uuid=?",
                         (*field_values.values(), h["updated_at"], h["sync_uuid"]),
                     )
+                    stats["updated"] += 1
                 else:
                     cols = ["sync_uuid"] + list(field_values.keys()) + ["updated_at"]
                     placeholders = ", ".join("?" for _ in cols)
@@ -706,6 +723,7 @@ class SyncEngine(QObject):
                         f"INSERT INTO hosts ({', '.join(cols)}) VALUES ({placeholders})",
                         (h["sync_uuid"], *field_values.values(), h["updated_at"]),
                     )
+                    stats["added"] += 1
 
             tomb_host_uuids = {
                 t["sync_uuid"]
@@ -715,6 +733,7 @@ class SyncEngine(QObject):
             for uuid in tomb_host_uuids:
                 if uuid in local_hosts:
                     conn.execute("DELETE FROM hosts WHERE sync_uuid=?", (uuid,))
+                    stats["deleted"] += 1
 
             # --- Host Tags ---
             local_ht = {
@@ -744,6 +763,7 @@ class SyncEngine(QObject):
                         "UPDATE host_tags SET host_id=?, tag_id=?, updated_at=? WHERE sync_uuid=?",
                         (host_id, tag_id, ht["updated_at"], ht["sync_uuid"]),
                     )
+                    stats["updated"] += 1
                 else:
                     conn.execute(
                         """INSERT OR REPLACE INTO host_tags
@@ -751,6 +771,7 @@ class SyncEngine(QObject):
                            VALUES (?, ?, ?, ?)""",
                         (host_id, tag_id, ht["sync_uuid"], ht["updated_at"]),
                     )
+                    stats["added"] += 1
 
             tomb_ht_uuids = {
                 t["sync_uuid"]
@@ -760,6 +781,7 @@ class SyncEngine(QObject):
             for uuid in tomb_ht_uuids:
                 if uuid in local_ht:
                     conn.execute("DELETE FROM host_tags WHERE sync_uuid=?", (uuid,))
+                    stats["deleted"] += 1
 
             # --- Sync tombstones to local table ---
             for t in payload.get("tombstones", []):
@@ -771,6 +793,7 @@ class SyncEngine(QObject):
 
             conn.commit()
         logger.info("Applied merged payload to local DB")
+        return stats
 
     async def _pull_file(self, filename: str) -> None:
         """Download a single sync file from cloud."""
