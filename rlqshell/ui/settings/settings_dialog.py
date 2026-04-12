@@ -43,7 +43,7 @@ class SettingsDialog(QDialog):
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Settings")
-        self.setFixedSize(700, 500)
+        self.setFixedSize(750, 560)
         self._sync_engine = sync_engine
         self._update_manager = update_manager
         self._token_store = token_store

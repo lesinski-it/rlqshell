@@ -39,20 +39,8 @@ class AbstractCloudProvider(ABC):
             self._session = None
 
     @abstractmethod
-    async def authenticate(self, auth_code: str) -> bool:
-        """Exchange an auth code for tokens. Returns True on success."""
-
-    @abstractmethod
-    async def refresh_token(self) -> bool:
-        """Refresh the access token. Returns True on success."""
-
-    @abstractmethod
     def is_authenticated(self) -> bool:
         """Whether valid tokens exist."""
-
-    @abstractmethod
-    def get_auth_url(self) -> str:
-        """Get the OAuth2 authorization URL."""
 
     @abstractmethod
     def get_tokens(self) -> tuple[str, str] | None:
@@ -61,6 +49,20 @@ class AbstractCloudProvider(ABC):
     @abstractmethod
     def set_tokens(self, access_token: str, refresh_token: str) -> None:
         """Restore tokens from encrypted storage."""
+
+    # --- Redirect-based OAuth (optional — override in redirect-flow providers) ---
+
+    def get_auth_url(self) -> str:
+        """Get the OAuth2 authorization URL (redirect flow only)."""
+        raise NotImplementedError
+
+    async def authenticate(self, auth_code: str) -> bool:
+        """Exchange an auth code for tokens (redirect flow only)."""
+        raise NotImplementedError
+
+    async def refresh_token(self) -> bool:
+        """Refresh the access token explicitly. Returns True on success."""
+        raise NotImplementedError
 
     @abstractmethod
     async def upload_file(self, local_path: str, remote_path: str) -> None:

@@ -4,7 +4,7 @@ from pathlib import Path
 
 # App metadata
 APP_NAME = "RLQShell"
-APP_VERSION = "0.2.30-beta"
+APP_VERSION = "2.4.0-beta"
 ORGANIZATION_NAME = "RLQShell"
 APP_AUTHOR = "Ravczy"
 APP_AUTHOR_WEBSITE = "https://www.lesinski.it"
@@ -105,6 +105,6 @@ DEFAULT_SSH_PORT = 22
 DEFAULT_SSH_KEEP_ALIVE = 60
 
 # Cloud sync OAuth client IDs (placeholders — user configurable)
-OAUTH_ONEDRIVE_CLIENT_ID = ""
+OAUTH_ONEDRIVE_CLIENT_ID = "b88283ef-9ffa-4923-b600-5624ea4f1a13"
 OAUTH_GOOGLE_CLIENT_ID = ""
 OAUTH_DROPBOX_APP_KEY = ""

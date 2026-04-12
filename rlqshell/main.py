@@ -190,6 +190,9 @@ def main() -> None:
 
                 provider = _create_provider(saved_provider_name, proxy_url)
                 provider.set_tokens(tokens[0], tokens[1])
+                if not provider.is_authenticated():
+                    logger.info("Saved tokens expired for %s", saved_provider_name)
+                    raise RuntimeError("saved tokens expired")
                 sync_engine.set_provider(provider)
                 sync_engine.set_token_save_callback(
                     lambda a, r: token_store.save_tokens(saved_provider_name, a, r)
@@ -458,28 +461,31 @@ def main() -> None:
     sync_engine.sync_conflict.connect(_on_sync_conflict)
 
     # Cleanup on close
-    def _cleanup() -> None:
-        logger.info("Cleaning up resources…")
-        update_manager.stop()
-        tunnel_engine.stop_all()
-        connection_pool.close_all()
-
-        # Sync on close
+    async def _async_cleanup() -> None:
+        """Run async cleanup tasks (sync on close, provider shutdown)."""
         if (
             app.config.get("sync.sync_on_close", False)
             and sync_engine.provider
             and sync_engine.provider.is_authenticated()
         ):
             try:
-                loop.run_until_complete(sync_engine.sync())
+                await sync_engine.sync()
             except Exception:
                 logger.warning("Sync on close failed", exc_info=True)
-
-        # Shutdown sync engine (close provider session)
         try:
-            loop.run_until_complete(sync_engine.shutdown())
+            await sync_engine.shutdown()
         except Exception:
             pass
+
+    def _cleanup() -> None:
+        logger.info("Cleaning up resources…")
+        update_manager.stop()
+        tunnel_engine.stop_all()
+        connection_pool.close_all()
+
+        # Schedule async cleanup — qasync loop is still running at this point
+        future = asyncio.ensure_future(_async_cleanup())
+        future.add_done_callback(lambda _: None)
 
         credential_store.lock()
         vault.close()

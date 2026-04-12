@@ -1,42 +1,95 @@
-"""OneDrive cloud provider — Microsoft Graph API (Personal + Business)."""
+"""OneDrive cloud provider — Microsoft Graph API via MSAL Device Code Flow."""
 
 from __future__ import annotations
 
-import base64
-import hashlib
 import logging
-import secrets
 
 import aiohttp
+import msal
 
 from rlqshell.core.sync.providers.base import AbstractCloudProvider, RemoteFileInfo
 
 logger = logging.getLogger(__name__)
 
 _GRAPH_API = "https://graph.microsoft.com/v1.0"
-_AUTH_URL = "https://login.microsoftonline.com/common/oauth2/v2.0"
-_SCOPES = "Files.ReadWrite offline_access"
+_AUTHORITY = "https://login.microsoftonline.com/consumers"
+_SCOPES = ["Files.ReadWrite"]
 
 
 class OneDriveProvider(AbstractCloudProvider):
-    """OneDrive sync via Microsoft Graph API (Personal + Business)."""
+    """OneDrive Personal sync via MSAL Device Code Flow + aiohttp Graph API."""
 
     def __init__(
         self,
         client_id: str,
-        redirect_uri: str = "http://localhost:8765/callback",
         proxy_url: str | None = None,
     ) -> None:
         super().__init__(proxy_url=proxy_url)
         self._client_id = client_id
-        self._redirect_uri = redirect_uri
-        self._access_token: str | None = None
-        self._refresh_token_str: str | None = None
+        self._cache = msal.SerializableTokenCache()
+        self._app: msal.PublicClientApplication | None = None
 
-        # PKCE
-        self._code_verifier = secrets.token_urlsafe(64)
-        digest = hashlib.sha256(self._code_verifier.encode()).digest()
-        self._code_challenge = base64.urlsafe_b64encode(digest).rstrip(b"=").decode()
+    def _get_app(self) -> msal.PublicClientApplication:
+        if self._app is None:
+            self._app = msal.PublicClientApplication(
+                self._client_id,
+                authority=_AUTHORITY,
+                token_cache=self._cache,
+            )
+        return self._app
+
+    # ------------------------------------------------------------------
+    # Device Code Flow (called from DeviceCodeDialog)
+    # ------------------------------------------------------------------
+
+    def initiate_device_flow(self) -> dict:
+        """Start Device Code Flow. Returns dict with user_code, verification_uri."""
+        app = self._get_app()
+        flow = app.initiate_device_flow(scopes=_SCOPES)
+        if "user_code" not in flow:
+            raise RuntimeError(
+                f"Device flow init failed: "
+                f"{flow.get('error_description', 'unknown error')}"
+            )
+        return flow
+
+    def complete_device_flow(self, flow: dict) -> bool:
+        """Block until user confirms login. Must run in a worker thread."""
+        app = self._get_app()
+        result = app.acquire_token_by_device_flow(flow)
+        if "access_token" in result:
+            logger.info("OneDrive Device Code Flow completed")
+            return True
+        raise RuntimeError(
+            f"Authentication failed: "
+            f"{result.get('error_description', result.get('error', 'unknown'))}"
+        )
+
+    def try_silent_auth(self) -> bool:
+        """Acquire token silently from cache. Returns True if a valid token exists."""
+        app = self._get_app()
+        accounts = app.get_accounts()
+        if not accounts:
+            return False
+        result = app.acquire_token_silent(_SCOPES, account=accounts[0])
+        return bool(result and "access_token" in result)
+
+    def _ensure_token(self, force_refresh: bool = False) -> str:
+        """Get a valid access token (from cache or via silent refresh)."""
+        app = self._get_app()
+        accounts = app.get_accounts()
+        if not accounts:
+            raise RuntimeError("No OneDrive account — authenticate first")
+        result = app.acquire_token_silent(
+            _SCOPES, account=accounts[0], force_refresh=force_refresh,
+        )
+        if result and "access_token" in result:
+            return result["access_token"]
+        raise RuntimeError("Token acquisition failed — re-authenticate required")
+
+    # ------------------------------------------------------------------
+    # AbstractCloudProvider interface
+    # ------------------------------------------------------------------
 
     @property
     def provider_name(self) -> str:
@@ -47,73 +100,34 @@ class OneDriveProvider(AbstractCloudProvider):
         return f"{_GRAPH_API}/$metadata"
 
     def is_authenticated(self) -> bool:
-        return self._access_token is not None
-
-    def get_auth_url(self) -> str:
-        return (
-            f"{_AUTH_URL}/authorize?"
-            f"client_id={self._client_id}&response_type=code"
-            f"&redirect_uri={self._redirect_uri}"
-            f"&scope={_SCOPES.replace(' ', '%20')}"
-            f"&code_challenge={self._code_challenge}"
-            f"&code_challenge_method=S256"
-        )
+        try:
+            return self.try_silent_auth()
+        except Exception:
+            return False
 
     def get_tokens(self) -> tuple[str, str] | None:
-        if self._access_token and self._refresh_token_str:
-            return (self._access_token, self._refresh_token_str)
+        """Return serialized MSAL cache as (cache_data, '') for persistence."""
+        if self._cache.has_state_changed or self._get_app().get_accounts():
+            data = self._cache.serialize()
+            if data:
+                return (data, "")
         return None
 
     def set_tokens(self, access_token: str, refresh_token: str) -> None:
-        """Restore tokens from encrypted storage."""
-        self._access_token = access_token
-        self._refresh_token_str = refresh_token
+        """Restore MSAL cache from persisted data."""
+        # access_token holds the serialized MSAL cache; refresh_token is unused
+        if access_token:
+            self._cache.deserialize(access_token)
+            # Recreate the app to pick up the restored cache
+            self._app = None
 
-    async def authenticate(self, auth_code: str) -> bool:
-        session = await self._get_session()
-        data = {
-            "client_id": self._client_id,
-            "code": auth_code,
-            "redirect_uri": self._redirect_uri,
-            "grant_type": "authorization_code",
-            "scope": _SCOPES,
-            "code_verifier": self._code_verifier,
-        }
-        async with session.post(
-            f"{_AUTH_URL}/token", data=data, proxy=self._proxy_url
-        ) as resp:
-            if resp.status != 200:
-                logger.error("OneDrive auth failed: %s", await resp.text())
-                return False
-            result = await resp.json()
-            self._access_token = result["access_token"]
-            self._refresh_token_str = result.get("refresh_token")
-            logger.info("OneDrive authenticated")
-            return True
-
-    async def refresh_token(self) -> bool:
-        if not self._refresh_token_str:
-            return False
-        session = await self._get_session()
-        data = {
-            "client_id": self._client_id,
-            "refresh_token": self._refresh_token_str,
-            "grant_type": "refresh_token",
-            "scope": _SCOPES,
-        }
-        async with session.post(
-            f"{_AUTH_URL}/token", data=data, proxy=self._proxy_url
-        ) as resp:
-            if resp.status != 200:
-                logger.error("OneDrive token refresh failed")
-                return False
-            result = await resp.json()
-            self._access_token = result["access_token"]
-            self._refresh_token_str = result.get("refresh_token", self._refresh_token_str)
-            return True
+    # ------------------------------------------------------------------
+    # HTTP helpers (aiohttp for async Graph API calls)
+    # ------------------------------------------------------------------
 
     def _headers(self) -> dict:
-        return {"Authorization": f"Bearer {self._access_token}"}
+        token = self._ensure_token()
+        return {"Authorization": f"Bearer {token}"}
 
     async def _request(
         self,
@@ -121,28 +135,33 @@ class OneDriveProvider(AbstractCloudProvider):
         url: str,
         **kwargs,
     ) -> aiohttp.ClientResponse:
-        """Execute an HTTP request with automatic 401 retry (token refresh)."""
+        """Execute an HTTP request with automatic 401 retry (silent token refresh)."""
         session = await self._get_session()
         kwargs.setdefault("proxy", self._proxy_url)
-        kwargs.setdefault("headers", self._headers())
+        kwargs["headers"] = self._headers()
 
         resp = await session.request(method, url, **kwargs)
         if resp.status == 401:
             resp.release()
-            if await self.refresh_token():
-                kwargs["headers"] = self._headers()
+            try:
+                token = self._ensure_token(force_refresh=True)
+                kwargs["headers"] = {"Authorization": f"Bearer {token}"}
                 resp = await session.request(method, url, **kwargs)
+            except RuntimeError:
+                pass  # return the 401 response
         return resp
 
+    # ------------------------------------------------------------------
+    # File operations
+    # ------------------------------------------------------------------
+
     async def create_folder(self, folder: str) -> None:
-        # Check if exists
         url = f"{_GRAPH_API}/me/drive/root:{folder}"
         resp = await self._request("GET", url)
         async with resp:
             if resp.status == 200:
                 return
 
-        # Create
         parent = "/".join(folder.rstrip("/").split("/")[:-1]) or "/"
         name = folder.rstrip("/").split("/")[-1]
         url = f"{_GRAPH_API}/me/drive/root:{parent}:/children"
@@ -215,7 +234,11 @@ class OneDriveProvider(AbstractCloudProvider):
             return files
 
     async def disconnect(self) -> None:
-        self._access_token = None
-        self._refresh_token_str = None
+        # Clear MSAL cache and accounts
+        app = self._get_app()
+        for account in app.get_accounts():
+            app.remove_account(account)
+        self._cache = msal.SerializableTokenCache()
+        self._app = None
         await self.close()
         logger.info("OneDrive disconnected")

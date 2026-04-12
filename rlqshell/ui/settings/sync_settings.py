@@ -4,16 +4,17 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import webbrowser
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QComboBox,
-    QFormLayout,
+    QFrame,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QPushButton,
+    QScrollArea,
     QSpinBox,
     QVBoxLayout,
     QWidget,
@@ -24,6 +25,8 @@ from rlqshell.app.constants import Colors
 from rlqshell.ui.widgets.toggle_switch import ToggleSwitch
 
 logger = logging.getLogger(__name__)
+
+_LABEL_MIN_W = 120
 
 
 class SyncSettings(QWidget):
@@ -43,10 +46,22 @@ class SyncSettings(QWidget):
         self._token_store = token_store
         self._credential_store = credential_store
 
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(24, 24, 24, 24)
-        layout.setSpacing(16)
+        # Outer layout — scroll area
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
 
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setStyleSheet("QScrollArea { background: transparent; border: none; }")
+
+        content = QWidget()
+        content.setStyleSheet("background: transparent;")
+        layout = QVBoxLayout(content)
+        layout.setContentsMargins(24, 24, 24, 24)
+        layout.setSpacing(6)
+
+        # --- Title ---
         title = QLabel("Cloud Sync")
         title.setStyleSheet(
             f"font-size: 18px; font-weight: 700; color: {Colors.TEXT_PRIMARY}; "
@@ -55,73 +70,119 @@ class SyncSettings(QWidget):
         layout.addWidget(title)
 
         desc = QLabel(
-            "Sync your hosts, keys, and settings across devices via cloud storage. "
-            "Data is encrypted before upload."
+            "Sync your hosts, keys, and settings across devices via "
+            "cloud storage. Data is encrypted before upload."
         )
         desc.setWordWrap(True)
         desc.setStyleSheet(
-            f"font-size: 12px; color: {Colors.TEXT_SECONDARY}; background: transparent;"
+            f"font-size: 12px; color: {Colors.TEXT_SECONDARY}; "
+            f"background: transparent; margin-bottom: 4px;"
         )
         layout.addWidget(desc)
 
-        form = QFormLayout()
-        form.setSpacing(12)
-        form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
+        # === Connection section ===
+        layout.addWidget(self._section_label("Connection"))
 
-        # Provider selection
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(12)
+        grid.setVerticalSpacing(8)
+        grid.setColumnMinimumWidth(0, _LABEL_MIN_W)
+        grid.setColumnStretch(1, 1)
+        row = 0
+
+        # Provider
+        grid.addWidget(self._make_label("Provider"), row, 0, Qt.AlignmentFlag.AlignRight)
         self._provider_combo = QComboBox()
         self._provider_combo.addItems(["None", "OneDrive", "Google Drive", "Dropbox"])
-        current = config.get("sync.provider", "None")
-        self._provider_combo.setCurrentText(current)
+        self._provider_combo.setCurrentText(config.get("sync.provider", "None"))
         self._provider_combo.currentTextChanged.connect(self._on_provider_changed)
-        form.addRow(self._make_label("Provider"), self._provider_combo)
+        grid.addWidget(self._provider_combo, row, 1)
+        row += 1
 
         # Cloud folder
+        grid.addWidget(
+            self._make_label("Cloud Folder"), row, 0, Qt.AlignmentFlag.AlignRight
+        )
+        folder_col = QVBoxLayout()
+        folder_col.setSpacing(2)
         self._cloud_folder = QLineEdit()
         self._cloud_folder.setText(config.get("sync.cloud_folder", "/RLQShell"))
         self._cloud_folder.setPlaceholderText("/RLQShell")
         self._cloud_folder.editingFinished.connect(self._on_cloud_folder_changed)
-        form.addRow(self._make_label("Cloud Folder"), self._cloud_folder)
-
-        folder_hint = QLabel("Folder will be created if it doesn't exist.")
-        folder_hint.setStyleSheet(
-            f"font-size: 11px; color: {Colors.TEXT_MUTED}; background: transparent;"
+        folder_col.addWidget(self._cloud_folder)
+        hint = QLabel("Folder will be created automatically if it doesn't exist.")
+        hint.setStyleSheet(
+            f"font-size: 10px; color: {Colors.TEXT_MUTED}; background: transparent;"
         )
-        form.addRow("", folder_hint)
+        folder_col.addWidget(hint)
+        grid.addLayout(folder_col, row, 1)
+        row += 1
 
-        # Auto-sync toggle
+        layout.addLayout(grid)
+
+        # === Sync behavior section ===
+        layout.addWidget(self._section_label("Behavior"))
+
+        grid2 = QGridLayout()
+        grid2.setHorizontalSpacing(12)
+        grid2.setVerticalSpacing(8)
+        grid2.setColumnMinimumWidth(0, _LABEL_MIN_W)
+        grid2.setColumnStretch(1, 1)
+        row = 0
+
+        # Auto sync
+        grid2.addWidget(
+            self._make_label("Auto Sync"), row, 0, Qt.AlignmentFlag.AlignRight
+        )
         self._auto_sync = ToggleSwitch()
         self._auto_sync.set_checked(config.get("sync.auto_sync", False))
         self._auto_sync.toggled.connect(lambda v: self._save("sync.auto_sync", v))
-        form.addRow(self._make_label("Auto Sync"), self._auto_sync)
+        grid2.addWidget(self._auto_sync, row, 1, Qt.AlignmentFlag.AlignLeft)
+        row += 1
 
         # Sync interval
+        grid2.addWidget(
+            self._make_label("Sync Interval"), row, 0, Qt.AlignmentFlag.AlignRight
+        )
         self._interval = QSpinBox()
         self._interval.setRange(1, 60)
         self._interval.setSuffix(" min")
+        self._interval.setFixedWidth(100)
         self._interval.setValue(config.get("sync.interval_minutes", 5))
         self._interval.valueChanged.connect(
             lambda v: self._save("sync.interval_minutes", v)
         )
-        form.addRow(self._make_label("Sync Interval"), self._interval)
+        grid2.addWidget(self._interval, row, 1, Qt.AlignmentFlag.AlignLeft)
+        row += 1
 
         # Sync on startup
+        grid2.addWidget(
+            self._make_label("Sync on Startup"), row, 0, Qt.AlignmentFlag.AlignRight
+        )
         self._sync_on_start = ToggleSwitch()
         self._sync_on_start.set_checked(config.get("sync.sync_on_start", False))
         self._sync_on_start.toggled.connect(
             lambda v: self._save("sync.sync_on_start", v)
         )
-        form.addRow(self._make_label("Sync on Startup"), self._sync_on_start)
+        grid2.addWidget(self._sync_on_start, row, 1, Qt.AlignmentFlag.AlignLeft)
+        row += 1
 
         # Sync on close
+        grid2.addWidget(
+            self._make_label("Sync on Close"), row, 0, Qt.AlignmentFlag.AlignRight
+        )
         self._sync_on_close = ToggleSwitch()
         self._sync_on_close.set_checked(config.get("sync.sync_on_close", False))
         self._sync_on_close.toggled.connect(
             lambda v: self._save("sync.sync_on_close", v)
         )
-        form.addRow(self._make_label("Sync on Close"), self._sync_on_close)
+        grid2.addWidget(self._sync_on_close, row, 1, Qt.AlignmentFlag.AlignLeft)
+        row += 1
 
         # Conflict strategy
+        grid2.addWidget(
+            self._make_label("Conflict Strategy"), row, 0, Qt.AlignmentFlag.AlignRight
+        )
         self._conflict_combo = QComboBox()
         self._conflict_combo.addItems(
             ["Last Write Wins", "Keep Local", "Keep Remote"]
@@ -136,27 +197,31 @@ class SyncSettings(QWidget):
             strategy_map.get(strategy, "Last Write Wins")
         )
         self._conflict_combo.currentTextChanged.connect(self._on_conflict_changed)
-        form.addRow(self._make_label("Conflict Strategy"), self._conflict_combo)
+        grid2.addWidget(self._conflict_combo, row, 1)
+        row += 1
 
-        layout.addLayout(form)
+        layout.addLayout(grid2)
 
-        # --- Proxy section ---
-        proxy_title = QLabel("Proxy")
-        proxy_title.setStyleSheet(
-            f"font-size: 15px; font-weight: 600; color: {Colors.TEXT_PRIMARY}; "
-            f"background: transparent; margin-top: 8px;"
+        # === Proxy section ===
+        layout.addWidget(self._section_label("Proxy"))
+
+        grid3 = QGridLayout()
+        grid3.setHorizontalSpacing(12)
+        grid3.setVerticalSpacing(8)
+        grid3.setColumnMinimumWidth(0, _LABEL_MIN_W)
+        grid3.setColumnStretch(1, 1)
+
+        grid3.addWidget(
+            self._make_label("Use Proxy"), 0, 0, Qt.AlignmentFlag.AlignRight
         )
-        layout.addWidget(proxy_title)
-
-        proxy_form = QFormLayout()
-        proxy_form.setSpacing(12)
-        proxy_form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
-
         self._proxy_toggle = ToggleSwitch()
         self._proxy_toggle.set_checked(config.get("sync.proxy_enabled", False))
         self._proxy_toggle.toggled.connect(self._on_proxy_toggled)
-        proxy_form.addRow(self._make_label("Use Proxy"), self._proxy_toggle)
+        grid3.addWidget(self._proxy_toggle, 0, 1, Qt.AlignmentFlag.AlignLeft)
 
+        grid3.addWidget(
+            self._make_label("Proxy URL"), 1, 0, Qt.AlignmentFlag.AlignRight
+        )
         self._proxy_url = QLineEdit()
         self._proxy_url.setText(config.get("sync.proxy_url", ""))
         self._proxy_url.setPlaceholderText("http://proxy.corp.com:8080")
@@ -164,29 +229,19 @@ class SyncSettings(QWidget):
         self._proxy_url.editingFinished.connect(
             lambda: self._save("sync.proxy_url", self._proxy_url.text().strip())
         )
-        proxy_form.addRow(self._make_label("Proxy URL"), self._proxy_url)
+        grid3.addWidget(self._proxy_url, 1, 1)
 
-        layout.addLayout(proxy_form)
+        layout.addLayout(grid3)
 
-        # Status area
-        status_layout = QHBoxLayout()
+        # === Status + buttons ===
+        layout.addSpacing(8)
 
         self._status_label = QLabel("Not connected")
         self._status_label.setStyleSheet(
             f"font-size: 12px; color: {Colors.TEXT_MUTED}; background: transparent;"
         )
-        status_layout.addWidget(self._status_label)
-        status_layout.addStretch()
+        layout.addWidget(self._status_label)
 
-        self._last_sync_label = QLabel("")
-        self._last_sync_label.setStyleSheet(
-            f"font-size: 11px; color: {Colors.TEXT_MUTED}; background: transparent;"
-        )
-        status_layout.addWidget(self._last_sync_label)
-
-        layout.addLayout(status_layout)
-
-        # Action buttons
         btn_layout = QHBoxLayout()
         btn_layout.setSpacing(8)
 
@@ -214,12 +269,24 @@ class SyncSettings(QWidget):
 
         layout.addStretch()
 
+        scroll.setWidget(content)
+        outer.addWidget(scroll)
+
         self._update_status()
 
     # --- Helpers ---
 
+    def _section_label(self, text: str) -> QLabel:
+        lbl = QLabel(text)
+        lbl.setStyleSheet(
+            f"font-size: 14px; font-weight: 600; color: {Colors.TEXT_PRIMARY}; "
+            f"background: transparent; margin-top: 10px; margin-bottom: 2px;"
+        )
+        return lbl
+
     def _make_label(self, text: str) -> QLabel:
         lbl = QLabel(text)
+        lbl.setMinimumWidth(_LABEL_MIN_W)
         lbl.setStyleSheet(
             f"font-size: 13px; color: {Colors.TEXT_SECONDARY}; background: transparent;"
         )
@@ -272,10 +339,36 @@ class SyncSettings(QWidget):
 
         self._status_label.setText("Connecting...")
         self._connect_btn.setEnabled(False)
-        asyncio.ensure_future(self._do_connect(provider_name))
 
-    async def _do_connect(self, provider_name: str) -> None:
-        """Full OAuth flow: create provider → start callback → open browser → authenticate."""
+        if provider_name == "OneDrive":
+            self._do_connect_device_code(provider_name)
+        else:
+            asyncio.ensure_future(self._do_connect_redirect(provider_name))
+
+    def _do_connect_device_code(self, provider_name: str) -> None:
+        """Device Code Flow (OneDrive Personal)."""
+        from rlqshell.ui.dialogs.device_code_dialog import DeviceCodeDialog
+
+        proxy_url = self._get_proxy_url()
+
+        try:
+            provider = _create_provider(provider_name, proxy_url)
+        except ValueError as exc:
+            self._status_label.setText(str(exc))
+            self._connect_btn.setEnabled(True)
+            return
+
+        dlg = DeviceCodeDialog(provider, parent=self.window())
+        if dlg.exec() == DeviceCodeDialog.DialogCode.Accepted:
+            self._finish_connect(provider_name, provider)
+        else:
+            self._status_label.setText("Authentication cancelled")
+            self._connect_btn.setEnabled(True)
+
+    async def _do_connect_redirect(self, provider_name: str) -> None:
+        """Browser redirect OAuth flow (Google Drive, Dropbox)."""
+        import webbrowser
+
         from rlqshell.core.sync.auth_server import OAuthCallbackServer
 
         proxy_url = self._get_proxy_url()
@@ -287,29 +380,29 @@ class SyncSettings(QWidget):
             self._connect_btn.setEnabled(True)
             return
 
-        # Start local OAuth callback server
         callback = OAuthCallbackServer()
         callback.start()
 
-        # Open browser for authorization
         auth_url = provider.get_auth_url()
         webbrowser.open(auth_url)
         self._status_label.setText("Waiting for authorization...")
 
-        # Wait for callback
         code = await callback.wait_for_code(timeout=120)
         if not code:
             self._status_label.setText("Authorization timed out")
             self._connect_btn.setEnabled(True)
             return
 
-        # Exchange code for tokens
         success = await provider.authenticate(code)
         if not success:
             self._status_label.setText("Authentication failed")
             self._connect_btn.setEnabled(True)
             return
 
+        self._finish_connect(provider_name, provider)
+
+    def _finish_connect(self, provider_name: str, provider) -> None:
+        """Common post-authentication setup for all providers."""
         # Persist tokens
         if self._token_store:
             tokens = provider.get_tokens()
