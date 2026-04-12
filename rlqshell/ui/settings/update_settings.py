@@ -151,6 +151,7 @@ class UpdateSettings(QWidget):
         self._status.setStyleSheet(
             f"font-size: 12px; color: {Colors.TEXT_MUTED}; background: transparent;"
         )
+        self._updater._manual_check = True
 
         async def _do_check() -> None:
             result = await self._updater.check_for_update()
@@ -161,6 +162,14 @@ class UpdateSettings(QWidget):
                 self._status.setStyleSheet(
                     f"font-size: 12px; color: {Colors.SUCCESS}; background: transparent;"
                 )
+            elif result is not None:
+                from rlqshell.ui.dialogs.update_dialog import UpdateDialog
+
+                forced = result.get("_forced", False)
+                dlg = UpdateDialog(
+                    result, self._updater, forced=forced, parent=self.window()
+                )
+                dlg.exec()
 
         asyncio.ensure_future(_do_check())
 

@@ -273,6 +273,11 @@ def main() -> None:
         from rlqshell.ui.dialogs.update_dialog import UpdateDialog
         from rlqshell.ui.widgets.toast import ToastManager
 
+        # Manual check from Settings opens UpdateDialog directly — skip toast.
+        if getattr(update_manager, "_manual_check", False):
+            update_manager._manual_check = False
+            return
+
         version = manifest.get("version", "?")
         forced = manifest.get("_forced", False)
 

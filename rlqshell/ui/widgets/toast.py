@@ -11,7 +11,7 @@ from PySide6.QtWidgets import QHBoxLayout, QLabel, QWidget
 from rlqshell.app.constants import Colors
 
 _TOAST_COLORS = {
-    "info": Colors.INFO,
+    "info": Colors.ACCENT,
     "success": Colors.SUCCESS,
     "warning": Colors.WARNING,
     "error": Colors.DANGER,
@@ -34,7 +34,7 @@ class ToastNotification(QWidget):
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Tool)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
 
-        color = _TOAST_COLORS.get(toast_type, Colors.INFO)
+        color = _TOAST_COLORS.get(toast_type, Colors.ACCENT)
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -42,15 +42,17 @@ class ToastNotification(QWidget):
         container = QWidget()
         container.setStyleSheet(
             f"background-color: {Colors.BG_SURFACE}; "
-            f"border: 1px solid {color}; "
-            f"border-radius: 8px; "
-            f"border-left: 4px solid {color};"
+            f"border: 2px solid {color}; "
+            f"border-radius: 8px;"
         )
         inner = QHBoxLayout(container)
         inner.setContentsMargins(16, 12, 16, 12)
 
         label = QLabel(message)
-        label.setStyleSheet(f"color: {Colors.TEXT_PRIMARY}; font-size: 13px; background: transparent;")
+        label.setStyleSheet(
+            f"color: {Colors.TEXT_PRIMARY}; font-size: 13px; "
+            f"background: transparent; border: none;"
+        )
         inner.addWidget(label)
 
         layout.addWidget(container)
