@@ -357,6 +357,11 @@ class SyncSettings(QWidget):
             self._status_label.setText(str(exc))
             self._connect_btn.setEnabled(True)
             return
+        except Exception as exc:
+            logger.exception("Failed to initialize sync provider %s", provider_name)
+            self._status_label.setText(f"Provider initialization failed: {exc}")
+            self._connect_btn.setEnabled(True)
+            return
 
         dlg = DeviceCodeDialog(provider, parent=self.window())
         if dlg.exec() == DeviceCodeDialog.DialogCode.Accepted:
@@ -377,6 +382,11 @@ class SyncSettings(QWidget):
             provider = _create_provider(provider_name, proxy_url)
         except ValueError as exc:
             self._status_label.setText(str(exc))
+            self._connect_btn.setEnabled(True)
+            return
+        except Exception as exc:
+            logger.exception("Failed to initialize sync provider %s", provider_name)
+            self._status_label.setText(f"Provider initialization failed: {exc}")
             self._connect_btn.setEnabled(True)
             return
 

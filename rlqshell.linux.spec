@@ -26,6 +26,7 @@ hiddenimports = [
     "PySide6.QtGui",
     "PySide6.QtWidgets",
     "PySide6.QtSvg",
+    "msal",
     "paramiko",
     "pyte",
     "qasync",
@@ -82,7 +83,6 @@ a = Analysis(
     excludes=[
         "tkinter",
         "test",
-        "msal",
         "google",
         "dropbox",
         "PyQt6",
