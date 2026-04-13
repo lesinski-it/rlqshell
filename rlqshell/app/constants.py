@@ -4,7 +4,7 @@ from pathlib import Path
 
 # App metadata
 APP_NAME = "RLQShell"
-APP_VERSION = "2.7.9"
+APP_VERSION = "2.8.0"
 ORGANIZATION_NAME = "RLQShell"
 APP_AUTHOR = "Ravczy"
 APP_AUTHOR_WEBSITE = "https://www.lesinski.it"
