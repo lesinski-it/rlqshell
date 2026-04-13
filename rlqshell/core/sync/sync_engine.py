@@ -6,7 +6,7 @@ import json
 import logging
 import shutil
 from dataclasses import asdict
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -242,7 +242,8 @@ class SyncEngine(QObject):
                 for filename in _SYNC_FILES:
                     local_hashes[filename] = SyncState.compute_file_hash(self._data_dir / filename)
 
-            local_hashes["rlqshell.db"] = SyncState.compute_file_hash(self._data_dir / "rlqshell.db")
+            db_path = self._data_dir / "rlqshell.db"
+            local_hashes["rlqshell.db"] = SyncState.compute_file_hash(db_path)
 
             records_changed = any(v > 0 for v in sync_stats.values())
             if any_pushed or any_pulled or records_changed or not remote_meta:
@@ -305,7 +306,7 @@ class SyncEngine(QObject):
     @staticmethod
     def _parse_ts(value: Any) -> datetime:
         if not value:
-            return datetime.fromtimestamp(0, tz=timezone.utc)
+            return datetime.fromtimestamp(0, tz=UTC)
         if isinstance(value, datetime):
             dt = value
         else:
@@ -316,10 +317,10 @@ class SyncEngine(QObject):
                 try:
                     dt = datetime.strptime(text, "%Y-%m-%d %H:%M:%S")
                 except ValueError:
-                    return datetime.fromtimestamp(0, tz=timezone.utc)
+                    return datetime.fromtimestamp(0, tz=UTC)
         if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-        return dt.astimezone(timezone.utc)
+            dt = dt.replace(tzinfo=UTC)
+        return dt.astimezone(UTC)
 
     @classmethod
     def _normalize_ts(cls, value: Any) -> str:
@@ -507,7 +508,7 @@ class SyncEngine(QObject):
     def _prune_local_tombstones(self) -> None:
         """Delete tombstones older than the retention window."""
         cutoff = (
-            datetime.now(tz=timezone.utc)
+            datetime.now(tz=UTC)
             - timedelta(days=_TOMBSTONE_RETENTION_DAYS)
         ).isoformat(timespec="seconds").replace("+00:00", "Z")
         with self._db.connection() as conn:

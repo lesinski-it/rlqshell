@@ -30,7 +30,7 @@ def main() -> None:
     QApplication.processEvents()
     _splash_shown_at = time.monotonic()
 
-    _SPLASH_MIN_SECS = 1.5
+    _splash_min_secs = 1.5
 
     # Window icon — fast, but still after splash so we don't delay it.
     app.load_window_icon()
@@ -116,7 +116,7 @@ def main() -> None:
 
     # Smoothly animate 85% → 100% during the minimum-display window so the bar
     # actually looks like it's filling up instead of freezing on the last step.
-    _remaining = _SPLASH_MIN_SECS - (time.monotonic() - _splash_shown_at)
+    _remaining = _splash_min_secs - (time.monotonic() - _splash_shown_at)
     if _remaining > 0:
         _start = time.monotonic()
         _last_pct = 85
