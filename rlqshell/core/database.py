@@ -259,10 +259,6 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_groups_sync_uuid ON groups_(sync_uuid);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_tags_sync_uuid ON tags(sync_uuid);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_hosts_sync_uuid ON hosts(sync_uuid);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_host_tags_sync_uuid ON host_tags(sync_uuid);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_ssh_keys_sync_uuid ON ssh_keys(sync_uuid);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_identities_sync_uuid ON identities(sync_uuid);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_snippet_packages_sync_uuid ON snippet_packages(sync_uuid);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_snippets_sync_uuid ON snippets(sync_uuid);
 CREATE INDEX IF NOT EXISTS idx_tombstones_deleted_at ON sync_tombstones(deleted_at);
 """
 
