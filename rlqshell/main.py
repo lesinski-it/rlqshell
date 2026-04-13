@@ -469,6 +469,10 @@ def main() -> None:
         deleted = stats.get("deleted", 0)
         pushed = stats.get("pushed", 0)
 
+        # Refresh host list when local DB changed
+        if added or updated or deleted:
+            vault_page._host_list.refresh()
+
         parts = []
         if added:
             parts.append(f"+{added} added")
