@@ -206,10 +206,20 @@ class UpdateManager(QObject):
 
         try:
             if sys.platform == "win32":
-                subprocess.Popen(
-                    ["msiexec", "/i", str(path), "/passive", "/norestart"],
-                    close_fds=True,
-                )
+                import os
+
+                cmd = ["msiexec", "/i", str(path), "/passive", "/norestart"]
+                # Detect per-machine install: if running from Program Files,
+                # pass ALLUSERS=1 so MajorUpgrade finds the existing product
+                # in HKLM and upgrades in-place instead of installing alongside.
+                exe_dir = str(Path(sys.executable).resolve()).lower()
+                pf = os.environ.get("ProgramFiles", r"C:\Program Files").lower()
+                pf86 = os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)").lower()
+                if exe_dir.startswith(pf) or exe_dir.startswith(pf86):
+                    cmd.append("ALLUSERS=1")
+                    logger.info("Detected per-machine install, passing ALLUSERS=1")
+
+                subprocess.Popen(cmd, close_fds=True)
                 logger.info("Launched MSI installer: %s", path)
                 return True
 

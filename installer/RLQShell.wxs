@@ -44,6 +44,23 @@
     <Property Id="ARPNOMODIFY" Value="1" />
 
     <!--
+        Detect an existing per-machine installation by looking for the
+        registry marker written by the PerMachineMarker component below.
+        When found, force ALLUSERS=1 so MajorUpgrade matches the same
+        scope and upgrades in-place instead of installing a second copy.
+    -->
+    <Property Id="PREV_PERMACHINE">
+      <RegistrySearch Id="FindPrevPerMachine"
+                      Root="HKLM"
+                      Key="Software\RLQShell"
+                      Name="InstallScope"
+                      Type="raw" />
+    </Property>
+
+    <SetProperty Id="ALLUSERS"         Value="1" Before="FindRelatedProducts" Condition="PREV_PERMACHINE" Sequence="first" />
+    <SetProperty Id="MSIINSTALLPERUSER" Value="" Before="FindRelatedProducts" Condition="PREV_PERMACHINE" Sequence="first" />
+
+    <!--
         Properties consumed by WixUI_Advanced's InstallScopeDlg.
 
         ApplicationFolderName - folder name appended to the chosen base dir.
@@ -129,6 +146,24 @@
     </Component>
 
     <!--
+        Per-machine scope marker: writes to HKLM so the *next* installer
+        run can detect the existing scope via RegistrySearch (above) and
+        force ALLUSERS=1 for a clean MajorUpgrade. Only installed when
+        the user picks "all users" (MSIINSTALLPERUSER is empty/0).
+    -->
+    <Component Id="PerMachineMarker"
+               Directory="APPLICATIONFOLDER"
+               Guid="A1C2D3E4-F5A6-4B7C-8D9E-0F1A2B3C4D5E"
+               Condition="NOT MSIINSTALLPERUSER">
+      <RegistryValue Root="HKLM"
+                     Key="Software\RLQShell"
+                     Name="InstallScope"
+                     Type="string"
+                     Value="perMachine"
+                     KeyPath="yes" />
+    </Component>
+
+    <!--
         Feature tree
 
         Core is mandatory (AllowAbsent="no"). The two shortcut sub-features
@@ -143,6 +178,7 @@
              AllowAbsent="no"
              ConfigurableDirectory="APPLICATIONFOLDER">
       <ComponentRef Id="MainExecutable" />
+      <ComponentRef Id="PerMachineMarker" />
 
       <Feature Id="StartMenuShortcutFeature"
                Title="Skrót w menu Start"
