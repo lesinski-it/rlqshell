@@ -187,10 +187,10 @@ class SyncEngine(QObject):
             self._backup_local()
 
             self._prune_local_tombstones()
-            sync_stats = await self._sync_records_v2()
 
-            # Sync identities, SSH keys, snippets (separate file)
+            # Sync identities/keys/snippets FIRST — hosts reference them
             identity_stats = await self._sync_identities_v1()
+            sync_stats = await self._sync_records_v2()
             for k in sync_stats:
                 sync_stats[k] += identity_stats.get(k, 0)
 
