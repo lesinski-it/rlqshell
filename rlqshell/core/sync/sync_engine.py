@@ -288,7 +288,24 @@ class SyncEngine(QObject):
             "added": 0, "updated": 0, "deleted": 0, "pushed": 0,
         }
         if self._payload_hash(local_payload) != self._payload_hash(merged_payload):
-            stats = self._apply_merged_payload(merged_payload)
+            # Compute accurate stats by diffing local vs merged records
+            for entity in ("groups", "tags", "hosts", "host_tags"):
+                local_map = {
+                    r["sync_uuid"]: r for r in local_payload.get(entity, [])
+                }
+                for r in merged_payload.get(entity, []):
+                    uuid = r["sync_uuid"]
+                    if uuid not in local_map:
+                        stats["added"] += 1
+                    elif r != local_map[uuid]:
+                        stats["updated"] += 1
+                for uuid in local_map:
+                    if not any(
+                        r["sync_uuid"] == uuid
+                        for r in merged_payload.get(entity, [])
+                    ):
+                        stats["deleted"] += 1
+            self._apply_merged_payload(merged_payload)
 
         if self._payload_hash(remote_payload) != self._payload_hash(merged_payload):
             for entity in ("groups", "tags", "hosts", "host_tags"):
