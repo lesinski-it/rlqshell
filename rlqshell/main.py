@@ -514,6 +514,7 @@ def main() -> None:
     sync_engine.vault_key_changed.connect(_on_vault_key_changed)
 
     def _on_sync_completed(stats: dict) -> None:
+        from rlqshell.ui.vault.keychain_view import KeychainView
         from rlqshell.ui.widgets.toast import ToastManager
 
         added = stats.get("added", 0)
@@ -521,9 +522,12 @@ def main() -> None:
         deleted = stats.get("deleted", 0)
         pushed = stats.get("pushed", 0)
 
-        # Refresh host list when local DB changed
+        # Refresh vault views when local DB changed
         if added or updated or deleted:
             vault_page._host_list.refresh()
+            vault_page._refresh_identities()
+            if isinstance(vault_page._keychain_section, KeychainView):
+                vault_page._keychain_section.refresh()
 
         parts = []
         if added:
