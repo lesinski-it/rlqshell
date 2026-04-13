@@ -486,9 +486,16 @@ class ConnectionsPage(QWidget):
             identity = self._credential_store.get_identity(host.ssh_identity_id)
             if identity:
                 if identity.encrypted_password:
-                    password = self._credential_store.decrypt_password(
-                        identity.encrypted_password
-                    )
+                    try:
+                        password = self._credential_store.decrypt_password(
+                            identity.encrypted_password
+                        )
+                    except Exception:
+                        logger.warning(
+                            "Cannot decrypt password for identity %s"
+                            " — vault key may have changed after sync",
+                            identity.label,
+                        )
                 if identity.ssh_key_id:
                     pkey = self._keychain.get_paramiko_pkey(identity.ssh_key_id)
 

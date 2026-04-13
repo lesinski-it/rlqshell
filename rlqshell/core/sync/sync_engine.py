@@ -188,12 +188,9 @@ class SyncEngine(QObject):
 
             self._prune_local_tombstones()
 
-            # Sync identities/keys/snippets FIRST — hosts reference them
-            identity_stats = await self._sync_identities_v1()
-            sync_stats = await self._sync_records_v2()
-            for k in sync_stats:
-                sync_stats[k] += identity_stats.get(k, 0)
-
+            # --- 1. Sync files (vault.key, config.json) FIRST ---
+            # vault.key must land before encrypted records so the
+            # Fernet key matches the encrypted blobs.
             local_hashes: dict[str, str] = {
                 "rlqshell.db": SyncState.compute_file_hash(self._data_dir / "rlqshell.db")
             }
@@ -248,6 +245,12 @@ class SyncEngine(QObject):
             if any_pulled:
                 for filename in _SYNC_FILES:
                     local_hashes[filename] = SyncState.compute_file_hash(self._data_dir / filename)
+
+            # --- 2. Sync records (identities before hosts) ---
+            identity_stats = await self._sync_identities_v1()
+            sync_stats = await self._sync_records_v2()
+            for k in sync_stats:
+                sync_stats[k] += identity_stats.get(k, 0)
 
             db_path = self._data_dir / "rlqshell.db"
             local_hashes["rlqshell.db"] = SyncState.compute_file_hash(db_path)
