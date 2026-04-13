@@ -46,7 +46,7 @@ class HistoryView(QWidget):
         tb.setContentsMargins(16, 8, 16, 8)
         tb.setSpacing(8)
 
-        title = QLabel("Connection History")
+        title = QLabel("Activity History")
         title.setStyleSheet(
             f"font-size: 15px; font-weight: 600; color: {Colors.TEXT_PRIMARY}; "
             f"background: transparent;"

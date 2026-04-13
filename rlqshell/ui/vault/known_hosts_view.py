@@ -45,7 +45,7 @@ class KnownHostsView(QWidget):
         tb_layout = QHBoxLayout(toolbar)
         tb_layout.setContentsMargins(16, 8, 16, 8)
 
-        title = QLabel("Known Hosts")
+        title = QLabel("Trusted Hosts")
         title.setStyleSheet(
             f"font-size: 15px; font-weight: 700; color: {Colors.TEXT_PRIMARY}; "
             f"background: transparent;"
@@ -90,7 +90,7 @@ class KnownHostsView(QWidget):
 
         # Empty state
         self._empty_state = EmptyState(
-            title="No Known Hosts",
+            title="No Trusted Hosts",
             description="Host keys will appear here after your first SSH connection.",
             icon_text="🔐",
         )

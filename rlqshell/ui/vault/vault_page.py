@@ -128,11 +128,11 @@ class VaultPage(QWidget):
             self._identities_section = _PlaceholderSection("Identities")
         self._content_stack.addWidget(self._identities_section)
 
-        # Known Hosts view
+        # Trusted Hosts view
         if known_hosts is not None:
             self._known_hosts_section: QWidget = KnownHostsView(known_hosts)
         else:
-            self._known_hosts_section = _PlaceholderSection("Known Hosts")
+            self._known_hosts_section = _PlaceholderSection("Trusted Hosts")
 
         if pf_manager is not None:
             self._port_fwd_section: QWidget = PortForwardView(pf_manager, host_manager)

@@ -672,7 +672,7 @@ class HostListWidget(QWidget):
         tb_layout.setSpacing(8)
 
         self._search = QLineEdit()
-        self._search.setPlaceholderText("Search hosts\u2026")
+        self._search.setPlaceholderText("Search servers\u2026")
         self._search.setProperty("cssClass", "search")
         tb_layout.addWidget(self._search, 1)
 
