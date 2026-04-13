@@ -5,6 +5,8 @@ from __future__ import annotations
 import base64
 import hashlib
 import logging
+from datetime import UTC, datetime
+from uuid import uuid4
 
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec, ed25519, rsa
@@ -61,13 +63,14 @@ class Keychain:
         if passphrase and self._cred_store.is_unlocked:
             encrypted_passphrase = self._cred_store.encrypt_password(passphrase)
 
+        sync_uuid = str(uuid4())
         cursor = self._db.execute(
             """INSERT INTO ssh_keys
                 (vault_id, label, key_type, encrypted_private_key, public_key,
-                 encrypted_passphrase, fingerprint, bits)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                 encrypted_passphrase, fingerprint, bits, sync_uuid)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (vault_id, label, key_type, encrypted_private, public_key_str,
-             encrypted_passphrase, fingerprint, key_bits),
+             encrypted_passphrase, fingerprint, key_bits, sync_uuid),
         )
 
         return SSHKey(
@@ -80,6 +83,7 @@ class Keychain:
             encrypted_passphrase=encrypted_passphrase,
             fingerprint=fingerprint,
             bits=key_bits,
+            sync_uuid=sync_uuid,
         )
 
     def import_key(
@@ -114,20 +118,21 @@ class Keychain:
         if passphrase and self._cred_store.is_unlocked:
             encrypted_passphrase = self._cred_store.encrypt_password(passphrase)
 
+        sync_uuid = str(uuid4())
         cursor = self._db.execute(
             """INSERT INTO ssh_keys
                 (vault_id, label, key_type, encrypted_private_key, public_key,
-                 encrypted_passphrase, fingerprint, bits)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                 encrypted_passphrase, fingerprint, bits, sync_uuid)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (vault_id, label, key_type, encrypted_private, public_key_str,
-             encrypted_passphrase, fingerprint, key_bits),
+             encrypted_passphrase, fingerprint, key_bits, sync_uuid),
         )
 
         return SSHKey(
             id=cursor.lastrowid, vault_id=vault_id, label=label,
             key_type=key_type, encrypted_private_key=encrypted_private,
             public_key=public_key_str, encrypted_passphrase=encrypted_passphrase,
-            fingerprint=fingerprint, bits=key_bits,
+            fingerprint=fingerprint, bits=key_bits, sync_uuid=sync_uuid,
         )
 
     def export_public_key(self, key_id: int) -> str | None:
@@ -167,6 +172,19 @@ class Keychain:
 
     def delete_key(self, key_id: int) -> None:
         """Delete an SSH key."""
+        row = self._db.fetchone("SELECT sync_uuid FROM ssh_keys WHERE id=?", (key_id,))
+        if row and row["sync_uuid"]:
+            deleted_at = (
+                datetime.now(tz=UTC)
+                .replace(microsecond=0)
+                .isoformat()
+                .replace("+00:00", "Z")
+            )
+            self._db.execute(
+                "INSERT OR REPLACE INTO sync_tombstones"
+                " (entity_type, sync_uuid, deleted_at) VALUES (?, ?, ?)",
+                ("ssh_keys", row["sync_uuid"], deleted_at),
+            )
         self._db.execute("DELETE FROM ssh_keys WHERE id=?", (key_id,))
 
     def list_keys(self, vault_id: int = 1) -> list[SSHKey]:
@@ -180,7 +198,8 @@ class Keychain:
                 id=r["id"], vault_id=r["vault_id"], label=r["label"],
                 key_type=r["key_type"], public_key=r["public_key"],
                 fingerprint=r["fingerprint"], bits=r["bits"],
-                created_at=r["created_at"],
+                sync_uuid=r["sync_uuid"],
+                created_at=r["created_at"], updated_at=r["updated_at"],
             )
             for r in rows
         ]

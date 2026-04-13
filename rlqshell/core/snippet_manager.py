@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+from datetime import UTC, datetime
+from uuid import uuid4
 
 from rlqshell.core.database import Database
 from rlqshell.core.models.snippet import Snippet, SnippetPackage
@@ -18,23 +20,45 @@ class SnippetManager:
 
     # --- Packages ---
 
+    def _record_tombstone(self, entity_type: str, sync_uuid: str | None) -> None:
+        if not sync_uuid:
+            return
+        deleted_at = (
+            datetime.now(tz=UTC)
+            .replace(microsecond=0)
+            .isoformat()
+            .replace("+00:00", "Z")
+        )
+        self._db.execute(
+            "INSERT OR REPLACE INTO sync_tombstones"
+            " (entity_type, sync_uuid, deleted_at) VALUES (?, ?, ?)",
+            (entity_type, sync_uuid, deleted_at),
+        )
+
     def create_package(self, package: SnippetPackage) -> int:
         """Insert a new package and return its id."""
+        sync_uuid = str(uuid4())
         cursor = self._db.execute(
-            "INSERT INTO snippet_packages (vault_id, name, icon, sort_order) VALUES (?, ?, ?, ?)",
-            (package.vault_id, package.name, package.icon, package.sort_order),
+            "INSERT INTO snippet_packages"
+            " (vault_id, name, icon, sort_order, sync_uuid) VALUES (?, ?, ?, ?, ?)",
+            (package.vault_id, package.name, package.icon, package.sort_order, sync_uuid),
         )
         return cursor.lastrowid  # type: ignore[return-value]
 
     def update_package(self, package: SnippetPackage) -> None:
         """Update an existing package."""
         self._db.execute(
-            "UPDATE snippet_packages SET vault_id=?, name=?, icon=?, sort_order=? WHERE id=?",
+            "UPDATE snippet_packages SET vault_id=?, name=?, icon=?, sort_order=?,"
+            " updated_at=CURRENT_TIMESTAMP WHERE id=?",
             (package.vault_id, package.name, package.icon, package.sort_order, package.id),
         )
 
     def delete_package(self, package_id: int) -> None:
         """Delete a package by id."""
+        row = self._db.fetchone(
+            "SELECT sync_uuid FROM snippet_packages WHERE id=?", (package_id,)
+        )
+        self._record_tombstone("snippet_packages", row["sync_uuid"] if row else None)
         self._db.execute("DELETE FROM snippet_packages WHERE id=?", (package_id,))
 
     def list_packages(self, vault_id: int = 1) -> list[SnippetPackage]:
@@ -47,6 +71,8 @@ class SnippetManager:
             SnippetPackage(
                 id=r["id"], vault_id=r["vault_id"], name=r["name"],
                 icon=r["icon"], sort_order=r["sort_order"],
+                sync_uuid=r["sync_uuid"],
+                created_at=r["created_at"], updated_at=r["updated_at"],
             )
             for r in rows
         ]
@@ -55,15 +81,16 @@ class SnippetManager:
 
     def create_snippet(self, snippet: Snippet) -> int:
         """Insert a new snippet and return its id."""
+        sync_uuid = str(uuid4())
         cursor = self._db.execute(
             """INSERT INTO snippets
                 (vault_id, package_id, name, script, description, run_as_sudo,
-                 color_label, sort_order)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                 color_label, sort_order, sync_uuid)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 snippet.vault_id, snippet.package_id, snippet.name,
                 snippet.script, snippet.description, snippet.run_as_sudo,
-                snippet.color_label, snippet.sort_order,
+                snippet.color_label, snippet.sort_order, sync_uuid,
             ),
         )
         snippet_id = cursor.lastrowid
@@ -76,7 +103,8 @@ class SnippetManager:
         self._db.execute(
             """UPDATE snippets SET
                 vault_id=?, package_id=?, name=?, script=?, description=?,
-                run_as_sudo=?, color_label=?, sort_order=?
+                run_as_sudo=?, color_label=?, sort_order=?,
+                updated_at=CURRENT_TIMESTAMP
             WHERE id=?""",
             (
                 snippet.vault_id, snippet.package_id, snippet.name,
@@ -89,6 +117,10 @@ class SnippetManager:
 
     def delete_snippet(self, snippet_id: int) -> None:
         """Delete a snippet by id."""
+        row = self._db.fetchone(
+            "SELECT sync_uuid FROM snippets WHERE id=?", (snippet_id,)
+        )
+        self._record_tombstone("snippets", row["sync_uuid"] if row else None)
         self._db.execute("DELETE FROM snippets WHERE id=?", (snippet_id,))
 
     def get_snippet(self, snippet_id: int) -> Snippet | None:
@@ -132,7 +164,9 @@ class SnippetManager:
             run_as_sudo=bool(row["run_as_sudo"]),
             color_label=row["color_label"] if "color_label" in row.keys() else None,
             sort_order=row["sort_order"],
+            sync_uuid=row["sync_uuid"],
             created_at=row["created_at"],
+            updated_at=row["updated_at"],
         )
         if load_tags and snippet.id is not None:
             snippet.tags = self._get_snippet_tags(snippet.id)

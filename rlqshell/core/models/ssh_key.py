@@ -19,4 +19,6 @@ class SSHKey:
     encrypted_passphrase: bytes | None = None
     fingerprint: str | None = None
     bits: int | None = None
+    sync_uuid: str | None = None
     created_at: datetime | None = None
+    updated_at: datetime | None = None

@@ -122,7 +122,9 @@ CREATE TABLE IF NOT EXISTS ssh_keys (
     encrypted_passphrase BLOB,
     fingerprint TEXT,
     bits INTEGER,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    sync_uuid TEXT UNIQUE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE IF NOT EXISTS identities (
@@ -134,7 +136,9 @@ CREATE TABLE IF NOT EXISTS identities (
         CHECK(auth_type IN ('password','key','key+passphrase','agent')),
     encrypted_password BLOB,
     ssh_key_id INTEGER REFERENCES ssh_keys(id),
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    sync_uuid TEXT UNIQUE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 -- === SNIPPETS ===
@@ -144,7 +148,10 @@ CREATE TABLE IF NOT EXISTS snippet_packages (
     vault_id INTEGER NOT NULL REFERENCES vaults(id) ON DELETE CASCADE,
     name TEXT NOT NULL,
     icon TEXT,
-    sort_order INTEGER DEFAULT 0
+    sort_order INTEGER DEFAULT 0,
+    sync_uuid TEXT UNIQUE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE IF NOT EXISTS snippets (
@@ -157,7 +164,9 @@ CREATE TABLE IF NOT EXISTS snippets (
     run_as_sudo BOOLEAN DEFAULT 0,
     color_label TEXT,
     sort_order INTEGER DEFAULT 0,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    sync_uuid TEXT UNIQUE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE IF NOT EXISTS snippet_tags (
@@ -250,6 +259,10 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_groups_sync_uuid ON groups_(sync_uuid);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_tags_sync_uuid ON tags(sync_uuid);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_hosts_sync_uuid ON hosts(sync_uuid);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_host_tags_sync_uuid ON host_tags(sync_uuid);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_ssh_keys_sync_uuid ON ssh_keys(sync_uuid);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_identities_sync_uuid ON identities(sync_uuid);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_snippet_packages_sync_uuid ON snippet_packages(sync_uuid);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_snippets_sync_uuid ON snippets(sync_uuid);
 CREATE INDEX IF NOT EXISTS idx_tombstones_deleted_at ON sync_tombstones(deleted_at);
 """
 
@@ -374,6 +387,17 @@ class Database:
         _add_column_if_missing("host_tags", "created_at", "created_at TIMESTAMP")
         _add_column_if_missing("host_tags", "updated_at", "updated_at TIMESTAMP")
 
+        # SSH keys, identities, snippets sync support
+        _add_column_if_missing("ssh_keys", "sync_uuid", "sync_uuid TEXT")
+        _add_column_if_missing("ssh_keys", "updated_at", "updated_at TIMESTAMP")
+        _add_column_if_missing("identities", "sync_uuid", "sync_uuid TEXT")
+        _add_column_if_missing("identities", "updated_at", "updated_at TIMESTAMP")
+        _add_column_if_missing("snippet_packages", "sync_uuid", "sync_uuid TEXT")
+        _add_column_if_missing("snippet_packages", "created_at", "created_at TIMESTAMP")
+        _add_column_if_missing("snippet_packages", "updated_at", "updated_at TIMESTAMP")
+        _add_column_if_missing("snippets", "sync_uuid", "sync_uuid TEXT")
+        _add_column_if_missing("snippets", "updated_at", "updated_at TIMESTAMP")
+
         conn.execute(
             "UPDATE groups_ "
             "SET updated_at = COALESCE(updated_at, created_at, CURRENT_TIMESTAMP)"
@@ -387,6 +411,23 @@ class Database:
             "UPDATE host_tags "
             "SET created_at = COALESCE(created_at, CURRENT_TIMESTAMP), "
             "updated_at = COALESCE(updated_at, created_at, CURRENT_TIMESTAMP)"
+        )
+        conn.execute(
+            "UPDATE ssh_keys "
+            "SET updated_at = COALESCE(updated_at, created_at, CURRENT_TIMESTAMP)"
+        )
+        conn.execute(
+            "UPDATE identities "
+            "SET updated_at = COALESCE(updated_at, created_at, CURRENT_TIMESTAMP)"
+        )
+        conn.execute(
+            "UPDATE snippet_packages "
+            "SET created_at = COALESCE(created_at, CURRENT_TIMESTAMP), "
+            "updated_at = COALESCE(updated_at, created_at, CURRENT_TIMESTAMP)"
+        )
+        conn.execute(
+            "UPDATE snippets "
+            "SET updated_at = COALESCE(updated_at, created_at, CURRENT_TIMESTAMP)"
         )
 
         for row in conn.execute(
@@ -422,6 +463,15 @@ class Database:
                 (str(uuid4()), row[0], row[1]),
             )
 
+        for table in ("ssh_keys", "identities", "snippet_packages", "snippets"):
+            for row in conn.execute(
+                f"SELECT id FROM {table} WHERE sync_uuid IS NULL OR sync_uuid = ''"
+            ).fetchall():
+                conn.execute(
+                    f"UPDATE {table} SET sync_uuid=? WHERE id=?",
+                    (str(uuid4()), row[0]),
+                )
+
         conn.execute(
             """CREATE TABLE IF NOT EXISTS sync_tombstones (
                 entity_type TEXT NOT NULL,
@@ -436,6 +486,19 @@ class Database:
         conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_hosts_sync_uuid ON hosts(sync_uuid)")
         conn.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_host_tags_sync_uuid ON host_tags(sync_uuid)"
+        )
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_ssh_keys_sync_uuid ON ssh_keys(sync_uuid)"
+        )
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_identities_sync_uuid ON identities(sync_uuid)"
+        )
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS"
+            " idx_snippet_packages_sync_uuid ON snippet_packages(sync_uuid)"
+        )
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_snippets_sync_uuid ON snippets(sync_uuid)"
         )
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_tombstones_deleted_at ON sync_tombstones(deleted_at)"

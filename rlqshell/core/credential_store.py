@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import logging
 import struct
+from datetime import UTC, datetime
 from pathlib import Path
+from uuid import uuid4
 
 from cryptography.fernet import InvalidToken
 
@@ -187,11 +189,13 @@ class CredentialStore:
         if password and self._master_key:
             encrypted = self.encrypt_password(password)
 
+        sync_uuid = str(uuid4())
         cursor = self._db.execute(
             """INSERT INTO identities
-                (vault_id, label, username, auth_type, encrypted_password, ssh_key_id)
-            VALUES (?, ?, ?, ?, ?, ?)""",
-            (vault_id, label, username, auth_type, encrypted, ssh_key_id),
+                (vault_id, label, username, auth_type, encrypted_password,
+                 ssh_key_id, sync_uuid)
+            VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (vault_id, label, username, auth_type, encrypted, ssh_key_id, sync_uuid),
         )
         return cursor.lastrowid  # type: ignore[return-value]
 
@@ -208,7 +212,9 @@ class CredentialStore:
             auth_type=row["auth_type"],
             encrypted_password=row["encrypted_password"],
             ssh_key_id=row["ssh_key_id"],
+            sync_uuid=row["sync_uuid"],
             created_at=row["created_at"],
+            updated_at=row["updated_at"],
         )
 
     def get_decrypted_password(self, identity_id: int) -> str | None:
@@ -233,13 +239,30 @@ class CredentialStore:
                 auth_type=r["auth_type"],
                 encrypted_password=r["encrypted_password"],
                 ssh_key_id=r["ssh_key_id"],
+                sync_uuid=r["sync_uuid"],
                 created_at=r["created_at"],
+                updated_at=r["updated_at"],
             )
             for r in rows
         ]
 
     def delete_identity(self, identity_id: int) -> None:
         """Delete an identity."""
+        row = self._db.fetchone(
+            "SELECT sync_uuid FROM identities WHERE id=?", (identity_id,)
+        )
+        if row and row["sync_uuid"]:
+            deleted_at = (
+                datetime.now(tz=UTC)
+                .replace(microsecond=0)
+                .isoformat()
+                .replace("+00:00", "Z")
+            )
+            self._db.execute(
+                "INSERT OR REPLACE INTO sync_tombstones"
+                " (entity_type, sync_uuid, deleted_at) VALUES (?, ?, ?)",
+                ("identities", row["sync_uuid"], deleted_at),
+            )
         self._db.execute("DELETE FROM identities WHERE id=?", (identity_id,))
 
     # --- Private helpers ---

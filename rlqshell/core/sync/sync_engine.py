@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import logging
 import shutil
@@ -23,6 +24,7 @@ logger = logging.getLogger(__name__)
 
 _SYNC_FILES = ["vault.key", "config.json"]
 _SYNC_RECORDS_FILE = "sync_records_v2.json"
+_SYNC_IDENTITIES_FILE = "sync_identities_v1.json"
 _TOMBSTONE_RETENTION_DAYS = 30
 
 _BOOL_FIELDS = {
@@ -186,6 +188,11 @@ class SyncEngine(QObject):
 
             self._prune_local_tombstones()
             sync_stats = await self._sync_records_v2()
+
+            # Sync identities, SSH keys, snippets (separate file)
+            identity_stats = await self._sync_identities_v1()
+            for k in sync_stats:
+                sync_stats[k] += identity_stats.get(k, 0)
 
             local_hashes: dict[str, str] = {
                 "rlqshell.db": SyncState.compute_file_hash(self._data_dir / "rlqshell.db")
@@ -387,11 +394,15 @@ class SyncEngine(QObject):
 
         with self._db.connection() as conn:
             group_rows = conn.execute(
-                """SELECT g.sync_uuid, g.name, g.icon, g.color, g.default_identity_id,
-                          g.default_jump_host_id, g.sort_order, g.updated_at,
-                          pg.sync_uuid AS parent_sync_uuid
+                """SELECT g.sync_uuid, g.name, g.icon, g.color,
+                          g.default_identity_id, g.default_jump_host_id,
+                          g.sort_order, g.updated_at,
+                          pg.sync_uuid AS parent_sync_uuid,
+                          ident.sync_uuid AS default_identity_sync_uuid
                    FROM groups_ g
                    LEFT JOIN groups_ pg ON pg.id = g.parent_id
+                   LEFT JOIN identities ident
+                        ON ident.id = g.default_identity_id
                    WHERE g.sync_uuid IS NOT NULL"""
             ).fetchall()
             for row in group_rows:
@@ -403,6 +414,9 @@ class SyncEngine(QObject):
                         "icon": row["icon"],
                         "color": row["color"],
                         "default_identity_id": row["default_identity_id"],
+                        "default_identity_sync_uuid": row[
+                            "default_identity_sync_uuid"
+                        ],
                         "default_jump_host_id": row["default_jump_host_id"],
                         "sort_order": row["sort_order"],
                         "updated_at": self._normalize_ts(row["updated_at"]),
@@ -426,10 +440,14 @@ class SyncEngine(QObject):
 
             host_rows = conn.execute(
                 """SELECT h.*, g.sync_uuid AS group_sync_uuid,
-                          chain.sync_uuid AS ssh_host_chain_sync_uuid
+                          chain.sync_uuid AS ssh_host_chain_sync_uuid,
+                          ident.sync_uuid AS ssh_identity_sync_uuid,
+                          snip.sync_uuid AS ssh_startup_snippet_sync_uuid
                    FROM hosts h
                    LEFT JOIN groups_ g ON g.id = h.group_id
                    LEFT JOIN hosts chain ON chain.id = h.ssh_host_chain_id
+                   LEFT JOIN identities ident ON ident.id = h.ssh_identity_id
+                   LEFT JOIN snippets snip ON snip.id = h.ssh_startup_snippet_id
                    WHERE h.sync_uuid IS NOT NULL"""
             ).fetchall()
             for row in host_rows:
@@ -437,6 +455,10 @@ class SyncEngine(QObject):
                     "sync_uuid": row["sync_uuid"],
                     "group_sync_uuid": row["group_sync_uuid"],
                     "ssh_host_chain_sync_uuid": row["ssh_host_chain_sync_uuid"],
+                    "ssh_identity_sync_uuid": row["ssh_identity_sync_uuid"],
+                    "ssh_startup_snippet_sync_uuid": row[
+                        "ssh_startup_snippet_sync_uuid"
+                    ],
                     "updated_at": self._normalize_ts(row["updated_at"]),
                 }
                 for field in _HOST_FIELDS:
@@ -591,6 +613,17 @@ class SyncEngine(QObject):
                 local_groups_ts[r["sync_uuid"]] = r["updated_at"]
 
             for g in payload.get("groups", []):
+                # Resolve default_identity_id from sync_uuid
+                default_identity_id = g.get("default_identity_id")
+                di_suid = g.get("default_identity_sync_uuid")
+                if di_suid:
+                    di_row = conn.execute(
+                        "SELECT id FROM identities WHERE sync_uuid=?",
+                        (di_suid,),
+                    ).fetchone()
+                    if di_row:
+                        default_identity_id = di_row["id"]
+
                 if g["sync_uuid"] in local_groups:
                     local_ts = self._normalize_ts(
                         local_groups_ts.get(g["sync_uuid"])
@@ -604,7 +637,7 @@ class SyncEngine(QObject):
                            WHERE sync_uuid=?""",
                         (
                             g["name"], g["icon"], g["color"],
-                            g.get("default_identity_id"),
+                            default_identity_id,
                             g.get("default_jump_host_id"),
                             g.get("sort_order", 0), g["updated_at"],
                             g["sync_uuid"],
@@ -620,7 +653,7 @@ class SyncEngine(QObject):
                            VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?)""",
                         (
                             g["sync_uuid"], g["name"], g["icon"], g["color"],
-                            g.get("default_identity_id"),
+                            default_identity_id,
                             g.get("default_jump_host_id"),
                             g.get("sort_order", 0), g["updated_at"],
                         ),
@@ -731,6 +764,26 @@ class SyncEngine(QObject):
                 field_values = {f: h.get(f) for f in _HOST_FIELDS}
                 field_values["group_id"] = group_id
                 field_values["ssh_host_chain_id"] = chain_id
+
+                # Resolve ssh_identity_id from sync_uuid (prefer over raw int)
+                identity_suid = h.get("ssh_identity_sync_uuid")
+                if identity_suid:
+                    id_row = conn.execute(
+                        "SELECT id FROM identities WHERE sync_uuid=?",
+                        (identity_suid,),
+                    ).fetchone()
+                    if id_row:
+                        field_values["ssh_identity_id"] = id_row["id"]
+
+                # Resolve ssh_startup_snippet_id from sync_uuid
+                snippet_suid = h.get("ssh_startup_snippet_sync_uuid")
+                if snippet_suid:
+                    sn_row = conn.execute(
+                        "SELECT id FROM snippets WHERE sync_uuid=?",
+                        (snippet_suid,),
+                    ).fetchone()
+                    if sn_row:
+                        field_values["ssh_startup_snippet_id"] = sn_row["id"]
 
                 if h["sync_uuid"] in local_hosts:
                     set_clause = ", ".join(f"{f}=?" for f in field_values)
@@ -877,6 +930,590 @@ class SyncEngine(QObject):
             backups = sorted(self._backups_dir.glob("rlqshell_*.db"))
             for old in backups[:-10]:
                 old.unlink()
+
+    # ------------------------------------------------------------------
+    # Identity / snippet sync  (sync_identities_v1.json)
+    # ------------------------------------------------------------------
+
+    _IDENTITY_ENTITY_TYPES = ("ssh_keys", "identities", "snippet_packages", "snippets")
+
+    @staticmethod
+    def _empty_identities_payload() -> dict[str, Any]:
+        return {
+            "version": 1,
+            "ssh_keys": [],
+            "identities": [],
+            "snippet_packages": [],
+            "snippets": [],
+            "tombstones": [],
+        }
+
+    @staticmethod
+    def _blob_to_b64(value: bytes | None) -> str | None:
+        if value is None:
+            return None
+        return base64.b64encode(bytes(value)).decode("ascii")
+
+    @staticmethod
+    def _b64_to_blob(value: str | None) -> bytes | None:
+        if value is None:
+            return None
+        return base64.b64decode(value)
+
+    def _export_identity_records(self) -> dict[str, Any]:
+        payload = self._empty_identities_payload()
+
+        with self._db.connection() as conn:
+            # --- SSH Keys ---
+            for row in conn.execute(
+                """SELECT sync_uuid, vault_id, label, key_type,
+                          encrypted_private_key, public_key,
+                          encrypted_passphrase, fingerprint, bits, updated_at
+                   FROM ssh_keys WHERE sync_uuid IS NOT NULL"""
+            ).fetchall():
+                payload["ssh_keys"].append({
+                    "sync_uuid": row["sync_uuid"],
+                    "vault_id": row["vault_id"],
+                    "label": row["label"],
+                    "key_type": row["key_type"],
+                    "encrypted_private_key": self._blob_to_b64(
+                        row["encrypted_private_key"]
+                    ),
+                    "public_key": row["public_key"],
+                    "encrypted_passphrase": self._blob_to_b64(
+                        row["encrypted_passphrase"]
+                    ),
+                    "fingerprint": row["fingerprint"],
+                    "bits": row["bits"],
+                    "updated_at": self._normalize_ts(row["updated_at"]),
+                })
+
+            # --- Identities ---
+            for row in conn.execute(
+                """SELECT i.sync_uuid, i.vault_id, i.label, i.username,
+                          i.auth_type, i.encrypted_password, i.updated_at,
+                          k.sync_uuid AS ssh_key_sync_uuid
+                   FROM identities i
+                   LEFT JOIN ssh_keys k ON k.id = i.ssh_key_id
+                   WHERE i.sync_uuid IS NOT NULL"""
+            ).fetchall():
+                payload["identities"].append({
+                    "sync_uuid": row["sync_uuid"],
+                    "vault_id": row["vault_id"],
+                    "label": row["label"],
+                    "username": row["username"],
+                    "auth_type": row["auth_type"],
+                    "encrypted_password": self._blob_to_b64(
+                        row["encrypted_password"]
+                    ),
+                    "ssh_key_sync_uuid": row["ssh_key_sync_uuid"],
+                    "updated_at": self._normalize_ts(row["updated_at"]),
+                })
+
+            # --- Snippet Packages ---
+            for row in conn.execute(
+                """SELECT sync_uuid, vault_id, name, icon, sort_order, updated_at
+                   FROM snippet_packages WHERE sync_uuid IS NOT NULL"""
+            ).fetchall():
+                payload["snippet_packages"].append({
+                    "sync_uuid": row["sync_uuid"],
+                    "vault_id": row["vault_id"],
+                    "name": row["name"],
+                    "icon": row["icon"],
+                    "sort_order": row["sort_order"],
+                    "updated_at": self._normalize_ts(row["updated_at"]),
+                })
+
+            # --- Snippets ---
+            for row in conn.execute(
+                """SELECT s.sync_uuid, s.vault_id, s.name, s.script,
+                          s.description, s.run_as_sudo, s.color_label,
+                          s.sort_order, s.updated_at,
+                          sp.sync_uuid AS package_sync_uuid
+                   FROM snippets s
+                   LEFT JOIN snippet_packages sp ON sp.id = s.package_id
+                   WHERE s.sync_uuid IS NOT NULL"""
+            ).fetchall():
+                snippet_id_row = conn.execute(
+                    "SELECT id FROM snippets WHERE sync_uuid=?",
+                    (row["sync_uuid"],),
+                ).fetchone()
+                tags: list[str] = []
+                if snippet_id_row:
+                    tags = [
+                        r["name"]
+                        for r in conn.execute(
+                            "SELECT name FROM snippet_tags WHERE snippet_id=?"
+                            " ORDER BY name",
+                            (snippet_id_row["id"],),
+                        ).fetchall()
+                    ]
+                payload["snippets"].append({
+                    "sync_uuid": row["sync_uuid"],
+                    "vault_id": row["vault_id"],
+                    "name": row["name"],
+                    "script": row["script"],
+                    "description": row["description"],
+                    "run_as_sudo": bool(row["run_as_sudo"]),
+                    "color_label": row["color_label"],
+                    "sort_order": row["sort_order"],
+                    "package_sync_uuid": row["package_sync_uuid"],
+                    "tags": tags,
+                    "updated_at": self._normalize_ts(row["updated_at"]),
+                })
+
+            # --- Tombstones ---
+            tomb_rows = conn.execute(
+                "SELECT entity_type, sync_uuid, deleted_at FROM sync_tombstones"
+                " WHERE entity_type IN ('ssh_keys','identities',"
+                "'snippet_packages','snippets')"
+            ).fetchall()
+            for row in tomb_rows:
+                payload["tombstones"].append({
+                    "entity_type": row["entity_type"],
+                    "sync_uuid": row["sync_uuid"],
+                    "deleted_at": self._normalize_ts(row["deleted_at"]),
+                })
+
+        return payload
+
+    def _sanitize_identities_payload(
+        self, payload: dict[str, Any] | None
+    ) -> dict[str, Any]:
+        if not isinstance(payload, dict):
+            return self._empty_identities_payload()
+
+        out = self._empty_identities_payload()
+        for key in self._IDENTITY_ENTITY_TYPES + ("tombstones",):
+            values = payload.get(key, [])
+            if isinstance(values, list):
+                out[key] = [v for v in values if isinstance(v, dict)]
+
+        for entity in self._IDENTITY_ENTITY_TYPES:
+            normalized: list[dict[str, Any]] = []
+            for rec in out[entity]:
+                sync_uuid = str(rec.get("sync_uuid", "")).strip()
+                if not sync_uuid:
+                    continue
+                item = dict(rec)
+                item["sync_uuid"] = sync_uuid
+                item["updated_at"] = self._normalize_ts(item.get("updated_at"))
+                normalized.append(item)
+            out[entity] = sorted(normalized, key=lambda r: r["sync_uuid"])
+
+        normalized_tombstones: list[dict[str, Any]] = []
+        for rec in out["tombstones"]:
+            entity_type = str(rec.get("entity_type", "")).strip()
+            sync_uuid = str(rec.get("sync_uuid", "")).strip()
+            if not entity_type or not sync_uuid:
+                continue
+            normalized_tombstones.append({
+                "entity_type": entity_type,
+                "sync_uuid": sync_uuid,
+                "deleted_at": self._normalize_ts(rec.get("deleted_at")),
+            })
+        out["tombstones"] = sorted(
+            normalized_tombstones,
+            key=lambda r: (r["entity_type"], r["sync_uuid"]),
+        )
+        return out
+
+    def _merge_identities_payloads(
+        self, local: dict[str, Any], remote: dict[str, Any]
+    ) -> dict[str, Any]:
+        merged = self._empty_identities_payload()
+
+        all_tombs: dict[tuple[str, str], str] = {}
+        for t in local.get("tombstones", []) + remote.get("tombstones", []):
+            key = (t["entity_type"], t["sync_uuid"])
+            existing = all_tombs.get(key, "")
+            if t["deleted_at"] > existing:
+                all_tombs[key] = t["deleted_at"]
+        merged["tombstones"] = sorted(
+            [
+                {"entity_type": k[0], "sync_uuid": k[1], "deleted_at": v}
+                for k, v in all_tombs.items()
+            ],
+            key=lambda r: (r["entity_type"], r["sync_uuid"]),
+        )
+
+        tomb_set = {
+            (t["entity_type"], t["sync_uuid"]) for t in merged["tombstones"]
+        }
+
+        for entity in self._IDENTITY_ENTITY_TYPES:
+            local_map: dict[str, dict[str, Any]] = {
+                r["sync_uuid"]: r for r in local.get(entity, [])
+            }
+            remote_map: dict[str, dict[str, Any]] = {
+                r["sync_uuid"]: r for r in remote.get(entity, [])
+            }
+            all_uuids = set(local_map.keys()) | set(remote_map.keys())
+            result: list[dict[str, Any]] = []
+
+            for uuid in all_uuids:
+                if (entity, uuid) in tomb_set:
+                    continue
+                l_rec = local_map.get(uuid)
+                r_rec = remote_map.get(uuid)
+                if l_rec and not r_rec:
+                    result.append(l_rec)
+                elif r_rec and not l_rec:
+                    result.append(r_rec)
+                else:
+                    l_ts = self._parse_ts(l_rec["updated_at"])
+                    r_ts = self._parse_ts(r_rec["updated_at"])
+                    result.append(r_rec if r_ts > l_ts else l_rec)
+
+            merged[entity] = sorted(result, key=lambda r: r["sync_uuid"])
+
+        return merged
+
+    def _apply_merged_identities_payload(
+        self, payload: dict[str, Any]
+    ) -> dict[str, int]:
+        stats = {"added": 0, "updated": 0, "deleted": 0, "pushed": 0}
+        with self._db.connection() as conn:
+            # --- SSH Keys ---
+            local_keys: dict[str, int] = {}
+            local_keys_ts: dict[str, str] = {}
+            for r in conn.execute(
+                "SELECT id, sync_uuid, updated_at FROM ssh_keys"
+                " WHERE sync_uuid IS NOT NULL"
+            ).fetchall():
+                local_keys[r["sync_uuid"]] = r["id"]
+                local_keys_ts[r["sync_uuid"]] = r["updated_at"]
+
+            for k in payload.get("ssh_keys", []):
+                enc_pk = self._b64_to_blob(k.get("encrypted_private_key"))
+                enc_pp = self._b64_to_blob(k.get("encrypted_passphrase"))
+
+                if k["sync_uuid"] in local_keys:
+                    local_ts = self._normalize_ts(
+                        local_keys_ts.get(k["sync_uuid"])
+                    )
+                    if local_ts == k["updated_at"]:
+                        continue
+                    conn.execute(
+                        """UPDATE ssh_keys SET label=?, key_type=?,
+                           encrypted_private_key=?, public_key=?,
+                           encrypted_passphrase=?, fingerprint=?, bits=?,
+                           updated_at=? WHERE sync_uuid=?""",
+                        (
+                            k["label"], k["key_type"], enc_pk, k.get("public_key"),
+                            enc_pp, k.get("fingerprint"), k.get("bits"),
+                            k["updated_at"], k["sync_uuid"],
+                        ),
+                    )
+                    stats["updated"] += 1
+                else:
+                    conn.execute(
+                        """INSERT INTO ssh_keys
+                           (sync_uuid, vault_id, label, key_type,
+                            encrypted_private_key, public_key,
+                            encrypted_passphrase, fingerprint, bits, updated_at)
+                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        (
+                            k["sync_uuid"], k.get("vault_id", 1), k["label"],
+                            k["key_type"], enc_pk, k.get("public_key"),
+                            enc_pp, k.get("fingerprint"), k.get("bits"),
+                            k["updated_at"],
+                        ),
+                    )
+                    stats["added"] += 1
+
+            tomb_key_uuids = {
+                t["sync_uuid"]
+                for t in payload.get("tombstones", [])
+                if t["entity_type"] == "ssh_keys"
+            }
+            for uuid in tomb_key_uuids:
+                if uuid in local_keys:
+                    conn.execute(
+                        "DELETE FROM ssh_keys WHERE sync_uuid=?", (uuid,)
+                    )
+                    stats["deleted"] += 1
+
+            # --- Identities ---
+            local_idents: dict[str, int] = {}
+            local_idents_ts: dict[str, str] = {}
+            for r in conn.execute(
+                "SELECT id, sync_uuid, updated_at FROM identities"
+                " WHERE sync_uuid IS NOT NULL"
+            ).fetchall():
+                local_idents[r["sync_uuid"]] = r["id"]
+                local_idents_ts[r["sync_uuid"]] = r["updated_at"]
+
+            for ident in payload.get("identities", []):
+                enc_pw = self._b64_to_blob(ident.get("encrypted_password"))
+
+                # Resolve ssh_key_id from sync_uuid
+                ssh_key_id = None
+                key_suid = ident.get("ssh_key_sync_uuid")
+                if key_suid:
+                    row = conn.execute(
+                        "SELECT id FROM ssh_keys WHERE sync_uuid=?",
+                        (key_suid,),
+                    ).fetchone()
+                    if row:
+                        ssh_key_id = row["id"]
+
+                if ident["sync_uuid"] in local_idents:
+                    local_ts = self._normalize_ts(
+                        local_idents_ts.get(ident["sync_uuid"])
+                    )
+                    if local_ts == ident["updated_at"]:
+                        continue
+                    conn.execute(
+                        """UPDATE identities SET label=?, username=?,
+                           auth_type=?, encrypted_password=?, ssh_key_id=?,
+                           updated_at=? WHERE sync_uuid=?""",
+                        (
+                            ident["label"], ident["username"],
+                            ident["auth_type"], enc_pw, ssh_key_id,
+                            ident["updated_at"], ident["sync_uuid"],
+                        ),
+                    )
+                    stats["updated"] += 1
+                else:
+                    conn.execute(
+                        """INSERT INTO identities
+                           (sync_uuid, vault_id, label, username, auth_type,
+                            encrypted_password, ssh_key_id, updated_at)
+                           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                        (
+                            ident["sync_uuid"], ident.get("vault_id", 1),
+                            ident["label"], ident["username"],
+                            ident["auth_type"], enc_pw, ssh_key_id,
+                            ident["updated_at"],
+                        ),
+                    )
+                    stats["added"] += 1
+
+            tomb_ident_uuids = {
+                t["sync_uuid"]
+                for t in payload.get("tombstones", [])
+                if t["entity_type"] == "identities"
+            }
+            for uuid in tomb_ident_uuids:
+                if uuid in local_idents:
+                    conn.execute(
+                        "DELETE FROM identities WHERE sync_uuid=?", (uuid,)
+                    )
+                    stats["deleted"] += 1
+
+            # --- Snippet Packages ---
+            local_pkgs: dict[str, int] = {}
+            local_pkgs_ts: dict[str, str] = {}
+            for r in conn.execute(
+                "SELECT id, sync_uuid, updated_at FROM snippet_packages"
+                " WHERE sync_uuid IS NOT NULL"
+            ).fetchall():
+                local_pkgs[r["sync_uuid"]] = r["id"]
+                local_pkgs_ts[r["sync_uuid"]] = r["updated_at"]
+
+            for pkg in payload.get("snippet_packages", []):
+                if pkg["sync_uuid"] in local_pkgs:
+                    local_ts = self._normalize_ts(
+                        local_pkgs_ts.get(pkg["sync_uuid"])
+                    )
+                    if local_ts == pkg["updated_at"]:
+                        continue
+                    conn.execute(
+                        """UPDATE snippet_packages SET name=?, icon=?,
+                           sort_order=?, updated_at=? WHERE sync_uuid=?""",
+                        (
+                            pkg["name"], pkg.get("icon"),
+                            pkg.get("sort_order", 0),
+                            pkg["updated_at"], pkg["sync_uuid"],
+                        ),
+                    )
+                    stats["updated"] += 1
+                else:
+                    conn.execute(
+                        """INSERT INTO snippet_packages
+                           (sync_uuid, vault_id, name, icon, sort_order,
+                            updated_at)
+                           VALUES (?, ?, ?, ?, ?, ?)""",
+                        (
+                            pkg["sync_uuid"], pkg.get("vault_id", 1),
+                            pkg["name"], pkg.get("icon"),
+                            pkg.get("sort_order", 0), pkg["updated_at"],
+                        ),
+                    )
+                    stats["added"] += 1
+
+            tomb_pkg_uuids = {
+                t["sync_uuid"]
+                for t in payload.get("tombstones", [])
+                if t["entity_type"] == "snippet_packages"
+            }
+            for uuid in tomb_pkg_uuids:
+                if uuid in local_pkgs:
+                    conn.execute(
+                        "DELETE FROM snippet_packages WHERE sync_uuid=?",
+                        (uuid,),
+                    )
+                    stats["deleted"] += 1
+
+            # --- Snippets ---
+            local_snips: dict[str, int] = {}
+            local_snips_ts: dict[str, str] = {}
+            for r in conn.execute(
+                "SELECT id, sync_uuid, updated_at FROM snippets"
+                " WHERE sync_uuid IS NOT NULL"
+            ).fetchall():
+                local_snips[r["sync_uuid"]] = r["id"]
+                local_snips_ts[r["sync_uuid"]] = r["updated_at"]
+
+            for s in payload.get("snippets", []):
+                # Resolve package_id from sync_uuid
+                package_id = None
+                pkg_suid = s.get("package_sync_uuid")
+                if pkg_suid:
+                    row = conn.execute(
+                        "SELECT id FROM snippet_packages WHERE sync_uuid=?",
+                        (pkg_suid,),
+                    ).fetchone()
+                    if row:
+                        package_id = row["id"]
+
+                if s["sync_uuid"] in local_snips:
+                    local_ts = self._normalize_ts(
+                        local_snips_ts.get(s["sync_uuid"])
+                    )
+                    if local_ts == s["updated_at"]:
+                        continue
+                    conn.execute(
+                        """UPDATE snippets SET name=?, script=?, description=?,
+                           run_as_sudo=?, color_label=?, sort_order=?,
+                           package_id=?, updated_at=? WHERE sync_uuid=?""",
+                        (
+                            s["name"], s["script"], s.get("description"),
+                            s.get("run_as_sudo", False), s.get("color_label"),
+                            s.get("sort_order", 0), package_id,
+                            s["updated_at"], s["sync_uuid"],
+                        ),
+                    )
+                    snippet_id = local_snips[s["sync_uuid"]]
+                    stats["updated"] += 1
+                else:
+                    cursor = conn.execute(
+                        """INSERT INTO snippets
+                           (sync_uuid, vault_id, name, script, description,
+                            run_as_sudo, color_label, sort_order, package_id,
+                            updated_at)
+                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        (
+                            s["sync_uuid"], s.get("vault_id", 1),
+                            s["name"], s["script"], s.get("description"),
+                            s.get("run_as_sudo", False), s.get("color_label"),
+                            s.get("sort_order", 0), package_id,
+                            s["updated_at"],
+                        ),
+                    )
+                    snippet_id = cursor.lastrowid
+                    stats["added"] += 1
+
+                # Sync snippet tags
+                tags = s.get("tags", [])
+                if isinstance(tags, list) and snippet_id:
+                    conn.execute(
+                        "DELETE FROM snippet_tags WHERE snippet_id=?",
+                        (snippet_id,),
+                    )
+                    for tag_name in tags:
+                        tag_name = str(tag_name).strip()
+                        if tag_name:
+                            conn.execute(
+                                "INSERT OR IGNORE INTO snippet_tags"
+                                " (snippet_id, name) VALUES (?, ?)",
+                                (snippet_id, tag_name),
+                            )
+
+            tomb_snip_uuids = {
+                t["sync_uuid"]
+                for t in payload.get("tombstones", [])
+                if t["entity_type"] == "snippets"
+            }
+            for uuid in tomb_snip_uuids:
+                if uuid in local_snips:
+                    conn.execute(
+                        "DELETE FROM snippets WHERE sync_uuid=?", (uuid,)
+                    )
+                    stats["deleted"] += 1
+
+            # --- Persist tombstones ---
+            for t in payload.get("tombstones", []):
+                conn.execute(
+                    """INSERT OR REPLACE INTO sync_tombstones
+                       (entity_type, sync_uuid, deleted_at) VALUES (?, ?, ?)""",
+                    (t["entity_type"], t["sync_uuid"], t["deleted_at"]),
+                )
+
+            conn.commit()
+        logger.info("Applied merged identities payload to local DB")
+        return stats
+
+    async def _sync_identities_v1(self) -> dict[str, int]:
+        """Sync identities/keys/snippets and return stats."""
+        local_payload = self._sanitize_identities_payload(
+            self._export_identity_records()
+        )
+        remote_payload = self._sanitize_identities_payload(
+            await self._download_identities()
+        )
+        merged_payload = self._merge_identities_payloads(
+            local_payload, remote_payload
+        )
+
+        stats: dict[str, int] = {
+            "added": 0, "updated": 0, "deleted": 0, "pushed": 0,
+        }
+        if self._payload_hash(local_payload) != self._payload_hash(
+            merged_payload
+        ):
+            stats = self._apply_merged_identities_payload(merged_payload)
+
+        if self._payload_hash(remote_payload) != self._payload_hash(
+            merged_payload
+        ):
+            for entity in self._IDENTITY_ENTITY_TYPES:
+                remote_uuids = {
+                    r["sync_uuid"] for r in remote_payload.get(entity, [])
+                }
+                for r in merged_payload.get(entity, []):
+                    if r["sync_uuid"] not in remote_uuids:
+                        stats["pushed"] += 1
+            await self._upload_identities(merged_payload)
+
+        return stats
+
+    async def _download_identities(self) -> dict[str, Any]:
+        tmp = self._data_dir / ".sync_identities_remote.json"
+        try:
+            await self._provider.download_file(
+                f"{self._cloud_folder}/{_SYNC_IDENTITIES_FILE}",
+                str(tmp),
+            )
+            return json.loads(tmp.read_text(encoding="utf-8"))
+        except Exception:
+            return self._empty_identities_payload()
+        finally:
+            if tmp.exists():
+                tmp.unlink()
+
+    async def _upload_identities(self, payload: dict[str, Any]) -> None:
+        tmp = self._data_dir / ".sync_identities_upload.json"
+        tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        try:
+            await self._provider.upload_file(
+                str(tmp),
+                f"{self._cloud_folder}/{_SYNC_IDENTITIES_FILE}",
+            )
+        finally:
+            if tmp.exists():
+                tmp.unlink()
 
     async def shutdown(self) -> None:
         """Close provider session and stop timers."""

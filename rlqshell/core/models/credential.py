@@ -17,4 +17,6 @@ class Identity:
     auth_type: str = "password"  # password | key | key+passphrase | agent
     encrypted_password: bytes | None = None
     ssh_key_id: int | None = None
+    sync_uuid: str | None = None
     created_at: datetime | None = None
+    updated_at: datetime | None = None

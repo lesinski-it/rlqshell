@@ -15,6 +15,9 @@ class SnippetPackage:
     name: str = ""
     icon: str | None = None
     sort_order: int = 0
+    sync_uuid: str | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
 
 
 @dataclass
@@ -30,5 +33,7 @@ class Snippet:
     run_as_sudo: bool = False
     color_label: str | None = None
     sort_order: int = 0
+    sync_uuid: str | None = None
     created_at: datetime | None = None
+    updated_at: datetime | None = None
     tags: list[str] | None = None
