@@ -2,17 +2,18 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, QSize, Signal
+from PySide6.QtCore import QPropertyAnimation, QSequentialAnimationGroup, QSize, Qt, Signal
+from PySide6.QtGui import QIcon
 from PySide6.QtSvgWidgets import QSvgWidget
 from PySide6.QtWidgets import (
+    QGraphicsOpacityEffect,
     QHBoxLayout,
     QLabel,
     QPushButton,
-    QSizePolicy,
     QWidget,
 )
 
-from rlqshell.app.constants import Colors, RESOURCES_DIR
+from rlqshell.app.constants import ICONS_DIR, RESOURCES_DIR, Colors
 
 
 class TopBar(QWidget):
@@ -20,6 +21,7 @@ class TopBar(QWidget):
 
     page_changed = Signal(int)
     settings_requested = Signal()
+    sync_requested = Signal()
 
     # Page indices
     PAGE_VAULT = 0
@@ -71,7 +73,44 @@ class TopBar(QWidget):
         self._connection_count = 0
         self._sftp_count = 0
 
-        layout.addSpacing(12)
+        # Cloud sync button — visible when a cloud provider is connected
+        self._cloud_btn = QPushButton()
+        self._cloud_btn.setFixedSize(28, 28)
+        self._cloud_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._cloud_btn.setToolTip("Synchronizuj teraz")
+        self._cloud_btn.setStyleSheet(
+            "QPushButton { background: transparent; border: none; padding: 0; }"
+            "QPushButton:hover { background: rgba(255,255,255,0.08); border-radius: 4px; }"
+        )
+        cloud_icon_path = ICONS_DIR / "cloud_sync.svg"
+        if cloud_icon_path.exists():
+            self._cloud_btn.setIcon(QIcon(str(cloud_icon_path)))
+            self._cloud_btn.setIconSize(QSize(20, 20))
+        self._cloud_btn.clicked.connect(self.sync_requested.emit)
+        self._cloud_btn.setVisible(False)
+
+        # Fade-in / fade-out animation during sync
+        self._cloud_opacity = QGraphicsOpacityEffect(self._cloud_btn)
+        self._cloud_opacity.setOpacity(1.0)
+        self._cloud_btn.setGraphicsEffect(self._cloud_opacity)
+
+        _fade_out = QPropertyAnimation(self._cloud_opacity, b"opacity", self)
+        _fade_out.setDuration(800)
+        _fade_out.setStartValue(1.0)
+        _fade_out.setEndValue(0.3)
+
+        _fade_in = QPropertyAnimation(self._cloud_opacity, b"opacity", self)
+        _fade_in.setDuration(800)
+        _fade_in.setStartValue(0.3)
+        _fade_in.setEndValue(1.0)
+
+        self._cloud_anim = QSequentialAnimationGroup(self)
+        self._cloud_anim.addAnimation(_fade_out)
+        self._cloud_anim.addAnimation(_fade_in)
+        self._cloud_anim.setLoopCount(-1)
+
+        layout.addWidget(self._cloud_btn)
+        layout.addSpacing(8)
 
         # Settings button
         settings_btn = QPushButton("Settings")
@@ -125,6 +164,18 @@ class TopBar(QWidget):
         """Update the Port Forwarding button label with active tunnel count."""
         btn = self._nav_buttons[self.PAGE_PORT_FORWARD]
         btn.setText(f"Tunneling ({count})" if count > 0 else "Tunneling")
+
+    def set_cloud_visible(self, visible: bool) -> None:
+        """Show or hide the cloud sync button."""
+        self._cloud_btn.setVisible(visible)
+
+    def set_cloud_syncing(self, syncing: bool) -> None:
+        """Start or stop the cloud pulsing animation."""
+        if syncing:
+            self._cloud_anim.start()
+        else:
+            self._cloud_anim.stop()
+            self._cloud_opacity.setOpacity(1.0)
 
     @staticmethod
     def _nav_button_style(active: bool) -> str:

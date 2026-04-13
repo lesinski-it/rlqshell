@@ -363,6 +363,8 @@ def main() -> None:
             lambda: window.apply_appearance(app.config)
         )
         dlg.exec()
+        # Refresh cloud sync button visibility after settings may have changed provider
+        window.top_bar.set_cloud_visible(_is_cloud_connected())
 
     def _build_palette_items() -> list[PaletteItem]:
         items: list[PaletteItem] = []
@@ -449,6 +451,24 @@ def main() -> None:
     # Wire settings button in top bar
     window.top_bar.settings_requested.disconnect()
     window.top_bar.settings_requested.connect(_open_settings)
+
+    # Cloud sync quick-access button
+    def _is_cloud_connected() -> bool:
+        return (
+            sync_engine.provider is not None
+            and sync_engine.provider.is_authenticated()
+        )
+
+    window.top_bar.set_cloud_visible(_is_cloud_connected())
+
+    def _on_quick_sync() -> None:
+        asyncio.ensure_future(sync_engine.sync())
+
+    window.top_bar.sync_requested.connect(_on_quick_sync)
+
+    sync_engine.sync_started.connect(lambda: window.top_bar.set_cloud_syncing(True))
+    sync_engine.sync_completed.connect(lambda _: window.top_bar.set_cloud_syncing(False))
+    sync_engine.sync_error.connect(lambda _: window.top_bar.set_cloud_syncing(False))
 
     # Sync conflict → toast notification
     def _on_sync_conflict(filename: str, winner: str) -> None:
