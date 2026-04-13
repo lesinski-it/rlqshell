@@ -134,6 +134,9 @@ class IdentitiesView(QWidget):
         add_btn.setProperty("cssClass", "primary")
         add_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         add_btn.clicked.connect(self._on_new_identity)
+        if not credential_store.is_unlocked:
+            add_btn.setEnabled(False)
+            add_btn.setToolTip("Vault is locked \u2014 enter master password at startup")
         toolbar_layout.addWidget(add_btn)
 
         if credential_store.is_unlocked:
@@ -211,7 +214,21 @@ class IdentitiesView(QWidget):
         dlg = ChangeMasterPasswordDialog(self._store, parent=self)
         dlg.exec()
 
+    def _require_unlocked(self) -> bool:
+        """Return True if the vault is unlocked; show a warning otherwise."""
+        if self._store.is_unlocked:
+            return True
+        QMessageBox.warning(
+            self,
+            "Vault Locked",
+            "The vault is locked. Enter the master password at startup\n"
+            "to create or edit identities.",
+        )
+        return False
+
     def _on_new_identity(self) -> None:
+        if not self._require_unlocked():
+            return
         from rlqshell.ui.vault.identity_editor import IdentityEditor
 
         dialog = IdentityEditor(self._store, self._keychain, parent=self)
@@ -219,6 +236,8 @@ class IdentitiesView(QWidget):
         dialog.exec()
 
     def _on_edit_identity(self, identity_id: int) -> None:
+        if not self._require_unlocked():
+            return
         from rlqshell.ui.vault.identity_editor import IdentityEditor
 
         dialog = IdentityEditor(
@@ -241,6 +260,8 @@ class IdentitiesView(QWidget):
         menu.exec(pos)
 
     def _delete_identity(self, identity_id: int) -> None:
+        if not self._require_unlocked():
+            return
         identity = self._store.get_identity(identity_id)
         label = identity.label if identity else "this identity"
 

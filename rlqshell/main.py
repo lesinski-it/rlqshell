@@ -228,6 +228,9 @@ def main() -> None:
     )
     window.set_vault_page(vault_page)
 
+    if not credential_store.is_unlocked:
+        window.top_bar.set_vault_locked(True)
+
     # Install Connections page
     connections_page = ConnectionsPage(
         vault.hosts, credential_store, keychain, connection_pool,

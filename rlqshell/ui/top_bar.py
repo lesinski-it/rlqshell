@@ -165,6 +165,16 @@ class TopBar(QWidget):
         btn = self._nav_buttons[self.PAGE_PORT_FORWARD]
         btn.setText(f"Tunneling ({count})" if count > 0 else "Tunneling")
 
+    def set_vault_locked(self, locked: bool) -> None:
+        """Show a lock indicator on the Vault button when the vault is locked."""
+        btn = self._nav_buttons[self.PAGE_VAULT]
+        if locked:
+            btn.setText("\U0001f512 Vault")
+            btn.setToolTip("Vault is locked \u2014 identity editing disabled")
+        else:
+            btn.setText("Vault")
+            btn.setToolTip("")
+
     def set_cloud_visible(self, visible: bool) -> None:
         """Show or hide the cloud sync button."""
         self._cloud_btn.setVisible(visible)

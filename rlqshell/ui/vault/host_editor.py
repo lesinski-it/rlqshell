@@ -374,7 +374,8 @@ class HostEditorContent(QWidget):
             for ident in self._credential_store.list_identities():
                 display = f"{ident.label} ({ident.username})"
                 self._identity_combo.addItem(display, ident.id)
-        self._identity_combo.addItem("+ Create new…", "__new__")
+        if self._credential_store.is_unlocked:
+            self._identity_combo.addItem("+ Create new…", "__new__")
 
     def _on_identity_changed(self) -> None:
         data = self._identity_combo.currentData()
@@ -386,6 +387,17 @@ class HostEditorContent(QWidget):
 
     def _open_identity_editor(self) -> None:
         if not self._credential_store or not self._keychain:
+            self._identity_combo.setCurrentIndex(0)
+            return
+        if not self._credential_store.is_unlocked:
+            from PySide6.QtWidgets import QMessageBox
+
+            QMessageBox.warning(
+                self,
+                "Vault Locked",
+                "The vault is locked. Enter the master password at startup\n"
+                "to create identities.",
+            )
             self._identity_combo.setCurrentIndex(0)
             return
         from rlqshell.ui.vault.identity_editor import IdentityEditor
