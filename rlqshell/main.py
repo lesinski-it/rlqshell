@@ -326,11 +326,13 @@ def main() -> None:
 
     update_manager = UpdateManager(app.config, parent=window)
 
-    def _on_update_available(manifest: dict) -> None:
-        from rlqshell.ui.dialogs.update_dialog import UpdateDialog
-        from rlqshell.ui.widgets.toast import ToastManager
+    _pending_manifest: dict | None = None
 
-        # Manual check from Settings opens UpdateDialog directly — skip toast.
+    def _on_update_available(manifest: dict) -> None:
+        nonlocal _pending_manifest
+        from rlqshell.ui.dialogs.update_dialog import UpdateDialog
+
+        # Manual check from Settings opens UpdateDialog directly — skip indicator.
         if getattr(update_manager, "_manual_check", False):
             update_manager._manual_check = False
             return
@@ -342,18 +344,18 @@ def main() -> None:
             dlg = UpdateDialog(manifest, update_manager, forced=True, parent=window)
             dlg.exec()
         else:
-            def _show_update_dialog() -> None:
-                dlg = UpdateDialog(manifest, update_manager, parent=window)
-                dlg.exec()
+            _pending_manifest = manifest
+            window.top_bar.set_update_available(version)
 
-            ToastManager.instance().show_toast(
-                f"Dostępna aktualizacja: v{version} — kliknij aby zaktualizować",
-                toast_type="info",
-                duration_ms=10000,
-                on_click=_show_update_dialog,
-            )
+    def _on_update_icon_clicked() -> None:
+        from rlqshell.ui.dialogs.update_dialog import UpdateDialog
+
+        if _pending_manifest:
+            dlg = UpdateDialog(_pending_manifest, update_manager, parent=window)
+            dlg.exec()
 
     update_manager.update_available.connect(_on_update_available)
+    window.top_bar.update_requested.connect(_on_update_icon_clicked)
 
     def _open_settings():
         dlg = SettingsDialog(

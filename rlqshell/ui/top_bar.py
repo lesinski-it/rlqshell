@@ -22,6 +22,7 @@ class TopBar(QWidget):
     page_changed = Signal(int)
     settings_requested = Signal()
     sync_requested = Signal()
+    update_requested = Signal()
 
     # Page indices
     PAGE_VAULT = 0
@@ -112,6 +113,22 @@ class TopBar(QWidget):
         layout.addWidget(self._cloud_btn)
         layout.addSpacing(8)
 
+        # Update available indicator — persistent until updated
+        self._update_btn = QPushButton()
+        self._update_btn.setFixedSize(28, 28)
+        self._update_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._update_btn.setToolTip("Dostępna aktualizacja")
+        self._update_btn.setText("⬆")
+        self._update_btn.setStyleSheet(
+            f"QPushButton {{ background: transparent; border: none; padding: 0;"
+            f"  color: {Colors.ACCENT}; font-size: 16px; font-weight: bold; }}"
+            f"QPushButton:hover {{ background: rgba(255,255,255,0.08); border-radius: 4px; }}"
+        )
+        self._update_btn.setVisible(False)
+        self._update_btn.clicked.connect(self.update_requested.emit)
+        layout.addWidget(self._update_btn)
+        layout.addSpacing(4)
+
         # Settings button
         settings_btn = QPushButton("Settings")
         settings_btn.setProperty("cssClass", "flat")
@@ -186,6 +203,11 @@ class TopBar(QWidget):
         else:
             self._cloud_anim.stop()
             self._cloud_opacity.setOpacity(1.0)
+
+    def set_update_available(self, version: str) -> None:
+        """Show the persistent update indicator with the target version."""
+        self._update_btn.setToolTip(f"Dostępna aktualizacja: v{version}")
+        self._update_btn.setVisible(True)
 
     @staticmethod
     def _nav_button_style(active: bool) -> str:
