@@ -508,12 +508,6 @@ def main() -> None:
                 f"Sync: {', '.join(parts)}",
                 toast_type="success",
             )
-        else:
-            ToastManager.instance().show_toast(
-                "Sync: everything up to date",
-                toast_type="info",
-                duration_ms=2000,
-            )
 
     sync_engine.sync_completed.connect(_on_sync_completed)
 

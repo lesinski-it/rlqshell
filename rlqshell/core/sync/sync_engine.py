@@ -288,24 +288,7 @@ class SyncEngine(QObject):
             "added": 0, "updated": 0, "deleted": 0, "pushed": 0,
         }
         if self._payload_hash(local_payload) != self._payload_hash(merged_payload):
-            # Compute accurate stats by diffing local vs merged records
-            for entity in ("groups", "tags", "hosts", "host_tags"):
-                local_map = {
-                    r["sync_uuid"]: r for r in local_payload.get(entity, [])
-                }
-                for r in merged_payload.get(entity, []):
-                    uuid = r["sync_uuid"]
-                    if uuid not in local_map:
-                        stats["added"] += 1
-                    elif r != local_map[uuid]:
-                        stats["updated"] += 1
-                for uuid in local_map:
-                    if not any(
-                        r["sync_uuid"] == uuid
-                        for r in merged_payload.get(entity, [])
-                    ):
-                        stats["deleted"] += 1
-            self._apply_merged_payload(merged_payload)
+            stats = self._apply_merged_payload(merged_payload)
 
         if self._payload_hash(remote_payload) != self._payload_hash(merged_payload):
             for entity in ("groups", "tags", "hosts", "host_tags"):
@@ -596,17 +579,23 @@ class SyncEngine(QObject):
         stats = {"added": 0, "updated": 0, "deleted": 0, "pushed": 0}
         with self._db.connection() as conn:
             # --- Groups ---
-            # Build sync_uuid -> local id map
-            local_groups = {
-                r["sync_uuid"]: r["id"]
-                for r in conn.execute(
-                    "SELECT id, sync_uuid FROM groups_ WHERE sync_uuid IS NOT NULL"
-                ).fetchall()
-            }
-            remote_group_uuids = {g["sync_uuid"] for g in payload.get("groups", [])}
+            # Build sync_uuid -> (id, updated_at) map
+            local_groups: dict[str, int] = {}
+            local_groups_ts: dict[str, str] = {}
+            for r in conn.execute(
+                "SELECT id, sync_uuid, updated_at FROM groups_"
+                " WHERE sync_uuid IS NOT NULL"
+            ).fetchall():
+                local_groups[r["sync_uuid"]] = r["id"]
+                local_groups_ts[r["sync_uuid"]] = r["updated_at"]
 
             for g in payload.get("groups", []):
                 if g["sync_uuid"] in local_groups:
+                    local_ts = self._normalize_ts(
+                        local_groups_ts.get(g["sync_uuid"])
+                    )
+                    if local_ts == g["updated_at"]:
+                        continue
                     conn.execute(
                         """UPDATE groups_ SET name=?, icon=?, color=?,
                            default_identity_id=?, default_jump_host_id=?,
@@ -662,15 +651,22 @@ class SyncEngine(QObject):
                     stats["deleted"] += 1
 
             # --- Tags ---
-            local_tags = {
-                r["sync_uuid"]: r["id"]
-                for r in conn.execute(
-                    "SELECT id, sync_uuid FROM tags WHERE sync_uuid IS NOT NULL"
-                ).fetchall()
-            }
+            local_tags: dict[str, int] = {}
+            local_tags_ts: dict[str, str] = {}
+            for r in conn.execute(
+                "SELECT id, sync_uuid, updated_at FROM tags"
+                " WHERE sync_uuid IS NOT NULL"
+            ).fetchall():
+                local_tags[r["sync_uuid"]] = r["id"]
+                local_tags_ts[r["sync_uuid"]] = r["updated_at"]
 
             for t in payload.get("tags", []):
                 if t["sync_uuid"] in local_tags:
+                    local_ts = self._normalize_ts(
+                        local_tags_ts.get(t["sync_uuid"])
+                    )
+                    if local_ts == t["updated_at"]:
+                        continue
                     conn.execute(
                         "UPDATE tags SET name=?, color=?, updated_at=? WHERE sync_uuid=?",
                         (t["name"], t["color"], t["updated_at"], t["sync_uuid"]),
@@ -694,14 +690,23 @@ class SyncEngine(QObject):
                     stats["deleted"] += 1
 
             # --- Hosts ---
-            local_hosts = {
-                r["sync_uuid"]: r["id"]
-                for r in conn.execute(
-                    "SELECT id, sync_uuid FROM hosts WHERE sync_uuid IS NOT NULL"
-                ).fetchall()
-            }
+            local_hosts: dict[str, int] = {}
+            local_hosts_ts: dict[str, str] = {}
+            for r in conn.execute(
+                "SELECT id, sync_uuid, updated_at FROM hosts"
+                " WHERE sync_uuid IS NOT NULL"
+            ).fetchall():
+                local_hosts[r["sync_uuid"]] = r["id"]
+                local_hosts_ts[r["sync_uuid"]] = r["updated_at"]
 
             for h in payload.get("hosts", []):
+                if h["sync_uuid"] in local_hosts:
+                    local_ts = self._normalize_ts(
+                        local_hosts_ts.get(h["sync_uuid"])
+                    )
+                    if local_ts == h["updated_at"]:
+                        continue
+
                 # Resolve group_id from sync_uuid
                 group_id = None
                 gsuid = h.get("group_sync_uuid")
@@ -753,14 +758,23 @@ class SyncEngine(QObject):
                     stats["deleted"] += 1
 
             # --- Host Tags ---
-            local_ht = {
-                r["sync_uuid"]: (r["host_id"], r["tag_id"])
-                for r in conn.execute(
-                    "SELECT sync_uuid, host_id, tag_id FROM host_tags WHERE sync_uuid IS NOT NULL"
-                ).fetchall()
-            }
+            local_ht: dict[str, str] = {}
+            local_ht_ts: dict[str, str] = {}
+            for r in conn.execute(
+                "SELECT sync_uuid, updated_at FROM host_tags"
+                " WHERE sync_uuid IS NOT NULL"
+            ).fetchall():
+                local_ht[r["sync_uuid"]] = r["sync_uuid"]
+                local_ht_ts[r["sync_uuid"]] = r["updated_at"]
 
             for ht in payload.get("host_tags", []):
+                if ht["sync_uuid"] in local_ht:
+                    local_ts = self._normalize_ts(
+                        local_ht_ts.get(ht["sync_uuid"])
+                    )
+                    if local_ts == ht["updated_at"]:
+                        continue
+
                 host_row = conn.execute(
                     "SELECT id FROM hosts WHERE sync_uuid=?",
                     (ht.get("host_sync_uuid"),),
