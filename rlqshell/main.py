@@ -486,6 +486,33 @@ def main() -> None:
 
     sync_engine.sync_conflict.connect(_on_sync_conflict)
 
+    # Vault key changed during sync — re-derive key silently or prompt
+    def _on_vault_key_changed() -> None:
+        if credential_store.re_derive_key():
+            logger.info("Vault key re-derived after sync (same password, new salt)")
+            return
+
+        # Password changed on remote device — must prompt
+        credential_store.lock()
+        window.top_bar.set_vault_locked(True)
+        logger.info("Vault key changed on remote — prompting for re-unlock")
+
+        from rlqshell.ui.dialogs.master_password_dialog import (
+            MasterPasswordDialog as _MPD,
+        )
+        from rlqshell.ui.widgets.toast import ToastManager
+
+        dlg = _MPD(credential_store, parent=window)
+        if dlg.exec() == _MPD.DialogCode.Accepted:
+            window.top_bar.set_vault_locked(False)
+        else:
+            ToastManager.instance().show_toast(
+                "Vault locked — re-enter password to connect.",
+                toast_type="warning",
+            )
+
+    sync_engine.vault_key_changed.connect(_on_vault_key_changed)
+
     def _on_sync_completed(stats: dict) -> None:
         from rlqshell.ui.widgets.toast import ToastManager
 

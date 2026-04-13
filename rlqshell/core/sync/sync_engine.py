@@ -85,6 +85,7 @@ class SyncEngine(QObject):
     sync_error = Signal(str)
     sync_conflict = Signal(str, str)  # filename, winner
     sync_skipped = Signal(str)  # reason
+    vault_key_changed = Signal()  # vault.key was pulled from remote
 
     def __init__(
         self,
@@ -216,6 +217,8 @@ class SyncEngine(QObject):
             any_pushed = False
             any_pulled = False
 
+            vault_key_pulled = False
+
             for filename in _SYNC_FILES:
                 local_hash = local_hashes.get(filename, "")
                 remote_hash = remote_hashes.get(filename, "")
@@ -232,12 +235,16 @@ class SyncEngine(QObject):
                 elif not local_hash:
                     await self._pull_file(filename)
                     any_pulled = True
+                    if filename == "vault.key":
+                        vault_key_pulled = True
                 else:
                     winner = self._resolver.resolve(local_modified, remote_modified)
                     self.sync_conflict.emit(filename, winner)
                     if winner == "remote":
                         await self._pull_file(filename)
                         any_pulled = True
+                        if filename == "vault.key":
+                            vault_key_pulled = True
                     else:
                         await self._push_file(filename)
                         any_pushed = True
@@ -245,6 +252,11 @@ class SyncEngine(QObject):
             if any_pulled:
                 for filename in _SYNC_FILES:
                     local_hashes[filename] = SyncState.compute_file_hash(self._data_dir / filename)
+
+            # If vault.key was updated from remote, the in-memory master key
+            # is stale — signal so the UI can prompt for re-unlock.
+            if vault_key_pulled:
+                self.vault_key_changed.emit()
 
             # --- 2. Sync records (identities before hosts) ---
             identity_stats = await self._sync_identities_v1()

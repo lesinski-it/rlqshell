@@ -1110,6 +1110,7 @@ class HostListWidget(QWidget):
         host = self._host_manager.get_host(host_id)
         if host:
             host.id = None
+            host.sync_uuid = None
             host.label = f"{host.label} (copy)"
             new_id = self._host_manager.create_host(host)
             self.refresh()

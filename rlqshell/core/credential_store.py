@@ -46,6 +46,7 @@ class CredentialStore:
         self._db = db
         self._vault_key_path = vault_key_path
         self._master_key: bytes | None = None
+        self._master_password: str | None = None
 
     @property
     def is_unlocked(self) -> bool:
@@ -82,6 +83,7 @@ class CredentialStore:
             self._pack_v2(salt, token, recovery_salt, enc_master_key)
         )
         self._master_key = key
+        self._master_password = password
         logger.info("Master password set (v2 format with recovery)")
         return recovery_code
 
@@ -93,12 +95,29 @@ class CredentialStore:
         data = self._vault_key_path.read_bytes()
 
         if data[:5] == _VAULT_MAGIC:
-            return self._unlock_v2(password, data)
-        return self._unlock_v1(password, data)
+            ok = self._unlock_v2(password, data)
+        else:
+            ok = self._unlock_v1(password, data)
+
+        if ok:
+            self._master_password = password
+        return ok
+
+    def re_derive_key(self) -> bool:
+        """Re-derive the master key from the stored password and current vault.key.
+
+        Called after sync pulls a new vault.key (different salt).
+        Returns True if re-derivation succeeded, False if the password
+        no longer matches (e.g. changed on another device).
+        """
+        if self._master_password is None:
+            return False
+        return self.unlock(self._master_password)
 
     def lock(self) -> None:
         """Lock the vault — clear the master key from memory."""
         self._master_key = None
+        self._master_password = None
         logger.info("Vault locked")
 
     def change_master_password(self, old_password: str, new_password: str) -> str:
