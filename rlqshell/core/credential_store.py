@@ -218,6 +218,28 @@ class CredentialStore:
         )
         return cursor.lastrowid  # type: ignore[return-value]
 
+    def update_identity(
+        self,
+        identity_id: int,
+        *,
+        label: str,
+        username: str,
+        auth_type: str,
+        password: str | None,
+        ssh_key_id: int | None,
+    ) -> None:
+        """Update an existing identity in-place, preserving id and sync_uuid."""
+        encrypted = None
+        if password and self._master_key:
+            encrypted = self.encrypt_password(password)
+        self._db.execute(
+            """UPDATE identities
+               SET label=?, username=?, auth_type=?, encrypted_password=?, ssh_key_id=?,
+                   updated_at=CURRENT_TIMESTAMP
+               WHERE id=?""",
+            (label, username, auth_type, encrypted, ssh_key_id, identity_id),
+        )
+
     def get_identity(self, identity_id: int) -> Identity | None:
         """Fetch an identity by id."""
         row = self._db.fetchone("SELECT * FROM identities WHERE id=?", (identity_id,))

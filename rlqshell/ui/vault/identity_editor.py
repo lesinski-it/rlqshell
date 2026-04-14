@@ -154,6 +154,11 @@ class IdentityEditor(QDialog):
             if key_idx >= 0:
                 self._key_combo.setCurrentIndex(key_idx)
 
+        if identity.auth_type in ("password", "key+passphrase"):
+            pwd = self._store.get_decrypted_password(identity_id)
+            if pwd:
+                self._password_edit.setText(pwd)
+
     def _save(self) -> None:
         label = self._label_edit.text().strip()
         username = self._username_edit.text().strip()
@@ -181,18 +186,24 @@ class IdentityEditor(QDialog):
                 return
 
         if self._identity_id:
-            # Update — delete old and re-create (simple approach)
-            self._store.delete_identity(self._identity_id)
-
-        identity_id = self._store.create_identity(
-            label=label,
-            username=username,
-            auth_type=auth_type,
-            password=password if password else None,
-            ssh_key_id=ssh_key_id,
-        )
-
-        self.identity_saved.emit(identity_id)
+            self._store.update_identity(
+                self._identity_id,
+                label=label,
+                username=username,
+                auth_type=auth_type,
+                password=password if password else None,
+                ssh_key_id=ssh_key_id,
+            )
+            self.identity_saved.emit(self._identity_id)
+        else:
+            identity_id = self._store.create_identity(
+                label=label,
+                username=username,
+                auth_type=auth_type,
+                password=password if password else None,
+                ssh_key_id=ssh_key_id,
+            )
+            self.identity_saved.emit(identity_id)
         self.accept()
 
     def _show_error(self, msg: str) -> None:
