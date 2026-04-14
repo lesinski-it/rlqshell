@@ -12,7 +12,7 @@ from uuid import uuid4
 
 logger = logging.getLogger(__name__)
 
-_SCHEMA_SQL = """
+_TABLES_SQL = """
 -- === ORGANIZACJA ===
 
 CREATE TABLE IF NOT EXISTS vaults (
@@ -252,8 +252,9 @@ CREATE TABLE IF NOT EXISTS sync_tombstones (
     PRIMARY KEY (entity_type, sync_uuid)
 );
 
--- === INDEXES ===
+"""
 
+_INDEXES_SQL = """
 CREATE INDEX IF NOT EXISTS idx_hosts_vault ON hosts(vault_id);
 CREATE INDEX IF NOT EXISTS idx_hosts_group ON hosts(group_id);
 CREATE INDEX IF NOT EXISTS idx_hosts_label ON hosts(label);
@@ -265,6 +266,10 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_groups_sync_uuid ON groups_(sync_uuid);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_tags_sync_uuid ON tags(sync_uuid);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_hosts_sync_uuid ON hosts(sync_uuid);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_host_tags_sync_uuid ON host_tags(sync_uuid);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_ssh_keys_sync_uuid ON ssh_keys(sync_uuid);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_identities_sync_uuid ON identities(sync_uuid);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_snippet_packages_sync_uuid ON snippet_packages(sync_uuid);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_snippets_sync_uuid ON snippets(sync_uuid);
 CREATE INDEX IF NOT EXISTS idx_tombstones_deleted_at ON sync_tombstones(deleted_at);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_port_forward_rules_sync_uuid ON port_forward_rules(sync_uuid);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_known_hosts_sync_uuid ON known_hosts(sync_uuid);
@@ -288,7 +293,7 @@ class Database:
     def initialize(self) -> None:
         """Create all tables and seed default data."""
         conn = self._get_connection()
-        conn.executescript(_SCHEMA_SQL)
+        conn.executescript(_TABLES_SQL)
 
         # Seed default vault if not exists
         row = conn.execute("SELECT id FROM vaults WHERE is_default = 1").fetchone()
@@ -299,6 +304,7 @@ class Database:
             conn.commit()
 
         self._run_migrations(conn)
+        conn.executescript(_INDEXES_SQL)
 
         logger.info("Database initialized: %s", self._db_path)
 
@@ -516,44 +522,6 @@ class Database:
             )"""
         )
 
-        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_groups_sync_uuid ON groups_(sync_uuid)")
-        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_tags_sync_uuid ON tags(sync_uuid)")
-        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_hosts_sync_uuid ON hosts(sync_uuid)")
-        conn.execute(
-            "CREATE UNIQUE INDEX IF NOT EXISTS idx_host_tags_sync_uuid ON host_tags(sync_uuid)"
-        )
-        conn.execute(
-            "CREATE UNIQUE INDEX IF NOT EXISTS idx_ssh_keys_sync_uuid ON ssh_keys(sync_uuid)"
-        )
-        conn.execute(
-            "CREATE UNIQUE INDEX IF NOT EXISTS idx_identities_sync_uuid ON identities(sync_uuid)"
-        )
-        conn.execute(
-            "CREATE UNIQUE INDEX IF NOT EXISTS"
-            " idx_snippet_packages_sync_uuid ON snippet_packages(sync_uuid)"
-        )
-        conn.execute(
-            "CREATE UNIQUE INDEX IF NOT EXISTS idx_snippets_sync_uuid ON snippets(sync_uuid)"
-        )
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_tombstones_deleted_at ON sync_tombstones(deleted_at)"
-        )
-        conn.execute(
-            "CREATE UNIQUE INDEX IF NOT EXISTS"
-            " idx_port_forward_rules_sync_uuid ON port_forward_rules(sync_uuid)"
-        )
-        conn.execute(
-            "CREATE UNIQUE INDEX IF NOT EXISTS"
-            " idx_known_hosts_sync_uuid ON known_hosts(sync_uuid)"
-        )
-        conn.execute(
-            "CREATE UNIQUE INDEX IF NOT EXISTS"
-            " idx_connection_history_sync_uuid ON connection_history(sync_uuid)"
-        )
-        conn.execute(
-            "CREATE UNIQUE INDEX IF NOT EXISTS"
-            " idx_known_hosts_host_port ON known_hosts(hostname, port)"
-        )
         conn.commit()
 
     def _get_connection(self) -> sqlite3.Connection:

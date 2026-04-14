@@ -4,12 +4,52 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import sqlite3
 import sys
 import time
 
 logger = logging.getLogger(__name__)
 
 _SERVER_NAME = "rlqshell-single-instance"
+
+
+def _handle_db_error(app: object, db: object, exc: sqlite3.OperationalError) -> bool:
+    """Show a user-friendly dialog when database initialization fails.
+
+    Returns True if the user chose to reset the database, False if they cancelled.
+    """
+    import pathlib
+
+    from PySide6.QtWidgets import QMessageBox
+
+    msg = QMessageBox()
+    msg.setWindowTitle("Błąd bazy danych")
+    msg.setIcon(QMessageBox.Icon.Critical)
+    msg.setText(
+        "Nie udało się otworzyć bazy danych po aktualizacji aplikacji.\n\n"
+        f"Błąd: {exc}\n\n"
+        "Możesz zacząć od nowa z pustą bazą danych.\n"
+        "Uwaga: hosty i ustawienia zostaną usunięte."
+    )
+
+    btn_reset = msg.addButton("Zacznij od nowa", QMessageBox.ButtonRole.AcceptRole)
+    btn_cancel = msg.addButton("Zamknij", QMessageBox.ButtonRole.RejectRole)
+    msg.setDefaultButton(btn_cancel)
+    msg.exec()
+
+    if msg.clickedButton() is not btn_reset:
+        return False
+
+    try:
+        db_path = getattr(getattr(app, "config", None), "db_path", None)
+        if db_path is not None:
+            p = pathlib.Path(db_path)
+            if p.exists():
+                p.unlink()
+    except Exception:
+        pass
+
+    return True
 
 
 def main() -> None:
@@ -129,7 +169,18 @@ def main() -> None:
 
     splash.update_progress(74, "Unlocking vault\u2026")
     vault = Vault(db)
-    vault.initialize()
+    try:
+        vault.initialize()
+    except sqlite3.OperationalError as _db_exc:
+        splash.hide()
+        if _handle_db_error(app, db, _db_exc):
+            db.close()
+            db = Database(app.config.db_path)
+            vault = Vault(db)
+            vault.initialize()
+            splash.show()
+        else:
+            sys.exit(1)
 
     splash.update_progress(85, "Initializing credentials\u2026")
     credential_store = CredentialStore(db, app.config.vault_key_path)
