@@ -31,11 +31,13 @@ class PortForwardView(QWidget):
         self,
         pf_manager: PortForwardManager,
         host_manager: HostManager,
+        vault_locked: bool = False,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self._pf = pf_manager
         self._hm = host_manager
+        self._vault_locked = vault_locked
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -61,6 +63,9 @@ class PortForwardView(QWidget):
         add_btn.setProperty("cssClass", "primary")
         add_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         add_btn.clicked.connect(self._on_new_rule)
+        if vault_locked:
+            add_btn.setEnabled(False)
+            add_btn.setToolTip("Vault is locked \u2014 enter master password at startup")
         tb.addWidget(add_btn)
 
         layout.addWidget(toolbar)
@@ -123,6 +128,8 @@ class PortForwardView(QWidget):
             self.refresh()
 
     def _on_context_menu(self, pos) -> None:
+        if self._vault_locked:
+            return
         item = self._table.itemAt(pos)
         if not item:
             return

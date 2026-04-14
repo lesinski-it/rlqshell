@@ -27,9 +27,10 @@ logger = logging.getLogger(__name__)
 class KnownHostsView(QWidget):
     """Table view for managing known SSH hosts."""
 
-    def __init__(self, manager: KnownHostsManager, parent: QWidget | None = None) -> None:
+    def __init__(self, manager: KnownHostsManager, vault_locked: bool = False, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._manager = manager
+        self._vault_locked = vault_locked
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -123,31 +124,29 @@ class KnownHostsView(QWidget):
                 fp = fp[:40] + "..."
             self._table.setItem(row, 3, QTableWidgetItem(fp))
 
-            # Delete button — wrapped + explicit inline style so it doesn't
-            # inherit the global QPushButton min-height/padding (which would
-            # otherwise overflow the row and look like a pressed cell).
+            # Delete button — only when vault is unlocked
             entry_id = entry.get("id", 0)
-            del_btn = QPushButton("Delete")
-            del_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            del_btn.setFixedSize(64, 26)
-            del_btn.setStyleSheet(
-                f"QPushButton {{ "
-                f"  background-color: {Colors.DANGER}; color: #ffffff; "
-                f"  border: none; border-radius: 6px; "
-                f"  padding: 0; min-height: 0; "
-                f"  font-size: 11px; font-weight: 600; "
-                f"}}"
-                f"QPushButton:hover {{ background-color: {Colors.DANGER}; }}"
-            )
-            del_btn.clicked.connect(lambda checked=False, eid=entry_id: self._delete(eid))
-
             cell_wrapper = QWidget()
             cell_wrapper.setStyleSheet("background: transparent;")
             wrap_layout = QHBoxLayout(cell_wrapper)
             wrap_layout.setContentsMargins(0, 0, 12, 0)
             wrap_layout.setSpacing(0)
             wrap_layout.addStretch()
-            wrap_layout.addWidget(del_btn, 0, Qt.AlignmentFlag.AlignVCenter)
+            if not self._vault_locked:
+                del_btn = QPushButton("Delete")
+                del_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+                del_btn.setFixedSize(64, 26)
+                del_btn.setStyleSheet(
+                    f"QPushButton {{ "
+                    f"  background-color: {Colors.DANGER}; color: #ffffff; "
+                    f"  border: none; border-radius: 6px; "
+                    f"  padding: 0; min-height: 0; "
+                    f"  font-size: 11px; font-weight: 600; "
+                    f"}}"
+                    f"QPushButton:hover {{ background-color: {Colors.DANGER}; }}"
+                )
+                del_btn.clicked.connect(lambda checked=False, eid=entry_id: self._delete(eid))
+                wrap_layout.addWidget(del_btn, 0, Qt.AlignmentFlag.AlignVCenter)
             self._table.setCellWidget(row, 4, cell_wrapper)
 
     def _delete(self, entry_id: int) -> None:

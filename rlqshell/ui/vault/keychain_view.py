@@ -194,9 +194,10 @@ class GenerateKeyDialog(QDialog):
 class KeychainView(QWidget):
     """SSH key management view — list, generate, import, export, delete."""
 
-    def __init__(self, keychain: Keychain, parent: QWidget | None = None) -> None:
+    def __init__(self, keychain: Keychain, vault_locked: bool = False, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._keychain = keychain
+        self._vault_locked = vault_locked
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -224,12 +225,18 @@ class KeychainView(QWidget):
         import_btn = QPushButton("Import")
         import_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         import_btn.clicked.connect(self._on_import_key)
+        if vault_locked:
+            import_btn.setEnabled(False)
+            import_btn.setToolTip("Vault is locked \u2014 enter master password at startup")
         toolbar_layout.addWidget(import_btn)
 
         generate_btn = QPushButton("Generate Key")
         generate_btn.setProperty("cssClass", "primary")
         generate_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         generate_btn.clicked.connect(self._on_generate_key)
+        if vault_locked:
+            generate_btn.setEnabled(False)
+            generate_btn.setToolTip("Vault is locked \u2014 enter master password at startup")
         toolbar_layout.addWidget(generate_btn)
 
         layout.addWidget(toolbar)
@@ -325,6 +332,8 @@ class KeychainView(QWidget):
             logger.exception("Failed to import key from %s", file_path)
 
     def _show_context_menu(self, key_id: int, pos) -> None:
+        if self._vault_locked:
+            return
         menu = QMenu(self)
 
         copy_pub = menu.addAction("Copy Public Key")

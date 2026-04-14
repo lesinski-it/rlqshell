@@ -649,11 +649,13 @@ class HostListWidget(QWidget):
     def __init__(
         self, host_manager: HostManager,
         connection_pool: ConnectionPool | None = None,
+        vault_locked: bool = False,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self._host_manager = host_manager
         self._connection_pool = connection_pool
+        self._vault_locked = vault_locked
 
         # Auto-refresh badges when connection status changes
         if connection_pool is not None:
@@ -700,6 +702,9 @@ class HostListWidget(QWidget):
         add_btn.setProperty("cssClass", "primary")
         add_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         add_btn.clicked.connect(self._on_add_menu)
+        if vault_locked:
+            add_btn.setEnabled(False)
+            add_btn.setToolTip("Vault is locked \u2014 enter master password at startup")
         tb_layout.addWidget(add_btn)
 
         layout.addWidget(toolbar)
@@ -1021,8 +1026,9 @@ class HostListWidget(QWidget):
             section.host_clicked.connect(self.host_selected.emit)
             section.host_double_clicked.connect(self.host_connect_requested.emit)
             section.host_context_menu.connect(self._on_context_menu)
-            section.edit_requested.connect(self._edit_group)
-            section.delete_requested.connect(self._delete_group)
+            if not self._vault_locked:
+                section.edit_requested.connect(self._edit_group)
+                section.delete_requested.connect(self._delete_group)
             section.host_dropped.connect(self._on_host_dropped_to_group)
             section.hosts_reordered.connect(self._on_hosts_reordered)
             self._content_layout.addWidget(section)
@@ -1062,25 +1068,32 @@ class HostListWidget(QWidget):
         menu = QMenu(self)
         connect_action = menu.addAction("Connect")
         sftp_action = menu.addAction("Open SFTP") if host and host.protocol == "ssh" else None
-        menu.addSeparator()
-        edit_action = menu.addAction("Edit")
-        duplicate_action = menu.addAction("Duplicate")
 
-        # Move to group submenu
-        groups = self._host_manager.list_groups()
-        if groups:
+        if not self._vault_locked:
             menu.addSeparator()
-            move_menu = menu.addMenu("Move to Group")
-            no_group_action = move_menu.addAction("No group")
-            move_menu.addSeparator()
-            group_actions = {}
-            for g in groups:
-                if host and g.id != host.group_id:
-                    action = move_menu.addAction(g.name)
-                    group_actions[action] = g.id
+            edit_action = menu.addAction("Edit")
+            duplicate_action = menu.addAction("Duplicate")
 
-        menu.addSeparator()
-        delete_action = menu.addAction("Delete")
+            # Move to group submenu
+            groups = self._host_manager.list_groups()
+            if groups:
+                menu.addSeparator()
+                move_menu = menu.addMenu("Move to Group")
+                no_group_action = move_menu.addAction("No group")
+                move_menu.addSeparator()
+                group_actions = {}
+                for g in groups:
+                    if host and g.id != host.group_id:
+                        action = move_menu.addAction(g.name)
+                        group_actions[action] = g.id
+
+            menu.addSeparator()
+            delete_action = menu.addAction("Delete")
+        else:
+            edit_action = duplicate_action = delete_action = None
+            groups = []
+            group_actions = {}
+            no_group_action = None
 
         action = menu.exec(pos)
         if action == connect_action:

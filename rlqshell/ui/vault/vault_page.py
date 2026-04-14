@@ -78,6 +78,7 @@ class VaultPage(QWidget):
         self._snippet_manager = snippet_manager
         self._history_manager = history_manager
         self._pf_manager = pf_manager
+        self._vault_locked = not (credential_store is not None and credential_store.is_unlocked)
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -93,7 +94,9 @@ class VaultPage(QWidget):
         layout.addWidget(self._content_stack, 1)
 
         # Host list (default section)
-        self._host_list = HostListWidget(host_manager, connection_pool=connection_pool)
+        self._host_list = HostListWidget(
+            host_manager, connection_pool=connection_pool, vault_locked=self._vault_locked
+        )
         self._host_list.host_selected.connect(self._on_host_selected)
         self._host_list.host_connect_requested.connect(self._on_host_connect)
         self._host_list.sftp_requested.connect(self._on_sftp_requested)
@@ -101,7 +104,9 @@ class VaultPage(QWidget):
 
         # Snippets
         if snippet_manager is not None:
-            self._snippets_section: QWidget = SnippetListView(snippet_manager)
+            self._snippets_section: QWidget = SnippetListView(
+                snippet_manager, vault_locked=self._vault_locked
+            )
             self._snippets_section.snippet_run_requested.connect(
                 self.snippet_run_requested.emit
             )
@@ -114,7 +119,9 @@ class VaultPage(QWidget):
 
         # Keychain view (real widget if keychain provided)
         if keychain is not None:
-            self._keychain_section: QWidget = KeychainView(keychain)
+            self._keychain_section: QWidget = KeychainView(
+                keychain, vault_locked=self._vault_locked
+            )
         else:
             self._keychain_section = _PlaceholderSection("Keychain")
         self._content_stack.addWidget(self._keychain_section)
@@ -130,17 +137,23 @@ class VaultPage(QWidget):
 
         # Trusted Hosts view
         if known_hosts is not None:
-            self._known_hosts_section: QWidget = KnownHostsView(known_hosts)
+            self._known_hosts_section: QWidget = KnownHostsView(
+                known_hosts, vault_locked=self._vault_locked
+            )
         else:
             self._known_hosts_section = _PlaceholderSection("Trusted Hosts")
 
         if pf_manager is not None:
-            self._port_fwd_section: QWidget = PortForwardView(pf_manager, host_manager)
+            self._port_fwd_section: QWidget = PortForwardView(
+                pf_manager, host_manager, vault_locked=self._vault_locked
+            )
         else:
             self._port_fwd_section = _PlaceholderSection("Port Forwarding")
 
         if history_manager is not None:
-            self._history_section: QWidget = HistoryView(history_manager)
+            self._history_section: QWidget = HistoryView(
+                history_manager, vault_locked=self._vault_locked
+            )
         else:
             self._history_section = _PlaceholderSection("History")
 
@@ -189,6 +202,8 @@ class VaultPage(QWidget):
             self._identities_section.refresh()
 
     def _on_host_selected(self, host_id: int) -> None:
+        if self._vault_locked:
+            return
         self._editor_content.load_host(host_id)
         if not self._editor_panel.is_open:
             self._editor_panel.open()

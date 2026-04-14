@@ -182,10 +182,12 @@ class SnippetListView(QWidget):
     def __init__(
         self,
         snippet_manager: SnippetManager,
+        vault_locked: bool = False,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self._manager = snippet_manager
+        self._vault_locked = vault_locked
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -212,12 +214,20 @@ class SnippetListView(QWidget):
         self._manage_pkg_btn.setProperty("cssClass", "flat")
         self._manage_pkg_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._manage_pkg_btn.clicked.connect(self._on_manage_packages)
+        if vault_locked:
+            self._manage_pkg_btn.setEnabled(False)
+            self._manage_pkg_btn.setToolTip(
+                "Vault is locked \u2014 enter master password at startup"
+            )
         tb.addWidget(self._manage_pkg_btn)
 
         add_btn = QPushButton("+ New")
         add_btn.setProperty("cssClass", "primary")
         add_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         add_btn.clicked.connect(self._on_new_snippet)
+        if vault_locked:
+            add_btn.setEnabled(False)
+            add_btn.setToolTip("Vault is locked \u2014 enter master password at startup")
         tb.addWidget(add_btn)
 
         layout.addWidget(toolbar)
@@ -489,11 +499,15 @@ class SnippetListView(QWidget):
         menu = QMenu(self)
         run_action = menu.addAction("Run in Terminal")
         broadcast_action = menu.addAction("Run on Multiple Terminals\u2026")
-        menu.addSeparator()
-        edit_action = menu.addAction("Edit")
-        duplicate_action = menu.addAction("Duplicate")
-        menu.addSeparator()
-        delete_action = menu.addAction("Delete")
+
+        if not self._vault_locked:
+            menu.addSeparator()
+            edit_action = menu.addAction("Edit")
+            duplicate_action = menu.addAction("Duplicate")
+            menu.addSeparator()
+            delete_action = menu.addAction("Delete")
+        else:
+            edit_action = duplicate_action = delete_action = None
 
         action = menu.exec(pos)
         if action == run_action:

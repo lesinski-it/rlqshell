@@ -29,6 +29,7 @@ class HistoryView(QWidget):
     def __init__(
         self,
         history_manager: HistoryManager,
+        vault_locked: bool = False,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -61,14 +62,15 @@ class HistoryView(QWidget):
         self._search.textChanged.connect(lambda: self.refresh())
         tb.addWidget(self._search)
 
-        clear_btn = QPushButton("Clear History")
-        clear_btn.setStyleSheet(
-            f"background: transparent; color: {Colors.DANGER}; border: 1px solid {Colors.DANGER}; "
-            f"border-radius: 6px; padding: 6px 12px; font-size: 12px;"
-        )
-        clear_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        clear_btn.clicked.connect(self._on_clear)
-        tb.addWidget(clear_btn)
+        if not vault_locked:
+            clear_btn = QPushButton("Clear History")
+            clear_btn.setStyleSheet(
+                f"background: transparent; color: {Colors.DANGER}; border: 1px solid {Colors.DANGER}; "
+                f"border-radius: 6px; padding: 6px 12px; font-size: 12px;"
+            )
+            clear_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            clear_btn.clicked.connect(self._on_clear)
+            tb.addWidget(clear_btn)
 
         layout.addWidget(toolbar)
 
