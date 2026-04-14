@@ -7,7 +7,6 @@ import uuid
 from functools import partial
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -35,18 +34,14 @@ class _BroadcastBar(QWidget):
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
+        self.setObjectName("BroadcastBar")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setFixedHeight(24)
-        self.setStyleSheet(
-            f"background:{Colors.WARNING}; border-radius:0px;"
-        )
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(8, 0, 8, 0)
 
         lbl = QLabel("\u25cf  BROADCAST MODE \u2014 input is sent to all panels")
-        lbl.setStyleSheet(
-            f"color:#1e1e2e; font-size:11px; font-weight:bold; background:transparent;"
-        )
         layout.addWidget(lbl)
         layout.addStretch()
 
@@ -66,18 +61,16 @@ class _PanelHeader(QWidget):
         super().__init__(parent)
         self._panel_id = panel_id
         self.setFixedHeight(22)
-        self.setStyleSheet(
-            f"background:{Colors.BG_SURFACE}; border-bottom:1px solid {Colors.BORDER};"
-        )
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(6, 0, 4, 0)
         layout.setSpacing(4)
 
         self._label = QLabel(host_label)
-        self._label.setStyleSheet(
-            f"color:{Colors.TEXT_SECONDARY}; font-size:11px; background:transparent;"
-        )
+        self._label.setStyleSheet("font-size:11px; background:transparent;")
+
+        # Apply default (unfocused) style
+        self.set_focused(False)
         layout.addWidget(self._label)
 
         self._broadcast_icon = QLabel("\u25cf")
@@ -112,6 +105,22 @@ class _PanelHeader(QWidget):
         )
         self._close_btn.clicked.connect(lambda: self.close_requested.emit(self._panel_id))
         layout.addWidget(self._close_btn)
+
+    def set_focused(self, focused: bool) -> None:
+        if focused:
+            bg = Colors.ACCENT
+            text_color = "#ffffff"
+            border_color = Colors.ACCENT
+        else:
+            bg = Colors.BG_SURFACE
+            text_color = Colors.TEXT_SECONDARY
+            border_color = Colors.BORDER
+        self.setStyleSheet(
+            f"background:{bg}; border-bottom:1px solid {border_color};"
+        )
+        self._label.setStyleSheet(
+            f"color:{text_color}; font-size:11px; background:transparent;"
+        )
 
     def set_broadcast_indicator(self, visible: bool) -> None:
         self._broadcast_icon.setVisible(visible)
@@ -188,6 +197,7 @@ class SplitPanel(QWidget):
     def set_focused(self, focused: bool) -> None:
         color = Colors.ACCENT if focused else Colors.BORDER
         self._set_border(color)
+        self._header.set_focused(focused)
 
     def set_broadcast_indicator(self, visible: bool) -> None:
         self._header.set_broadcast_indicator(visible)

@@ -9,12 +9,16 @@ import time
 
 logger = logging.getLogger(__name__)
 
+_SERVER_NAME = "rlqshell-single-instance"
+
 
 def main() -> None:
     """Launch the RLQShell application."""
     # Bare-minimum imports so the splash can appear as soon as humanly possible.
     # RLQShellApplication.__init__ is intentionally lean — fonts, icon and config
     # are loaded AFTER splash.show() so the user sees the loading window instantly.
+    from PySide6.QtCore import Qt
+    from PySide6.QtNetwork import QLocalServer, QLocalSocket
     from PySide6.QtWidgets import QApplication
 
     from rlqshell.app.application import RLQShellApplication
@@ -22,6 +26,22 @@ def main() -> None:
     from rlqshell.ui.splash_screen import SplashScreen
 
     app = RLQShellApplication(sys.argv)
+
+    # ── Single-instance guard ──────────────────────────────────────────
+    _socket = QLocalSocket()
+    _socket.connectToServer(_SERVER_NAME)
+    if _socket.waitForConnected(500):
+        # Another instance is already running — ask it to raise its window.
+        _socket.write(b"raise")
+        _socket.waitForBytesWritten(1000)
+        _socket.disconnectFromServer()
+        sys.exit(0)
+
+    # We are the first instance — start a local server so future launches
+    # can detect us. Remove a stale socket left after a crash first.
+    QLocalServer.removeServer(_SERVER_NAME)
+    _local_server = QLocalServer(app)
+    _local_server.listen(_SERVER_NAME)
 
     splash = SplashScreen(APP_VERSION)
     splash.show()
@@ -515,6 +535,7 @@ def main() -> None:
 
     def _on_sync_completed(stats: dict) -> None:
         from rlqshell.ui.vault.keychain_view import KeychainView
+        from rlqshell.ui.vault.snippet_list import SnippetListView
         from rlqshell.ui.widgets.toast import ToastManager
 
         added = stats.get("added", 0)
@@ -528,6 +549,8 @@ def main() -> None:
             vault_page._refresh_identities()
             if isinstance(vault_page._keychain_section, KeychainView):
                 vault_page._keychain_section.refresh()
+            if isinstance(vault_page._snippets_section, SnippetListView):
+                vault_page._snippets_section.refresh()
 
         parts = []
         if added:
@@ -583,6 +606,22 @@ def main() -> None:
     ToastManager.instance().set_parent(window)
 
     window.set_cleanup_callback(_cleanup)
+
+    # Bring window to front when a second instance pings us
+    def _on_second_instance() -> None:
+        conn = _local_server.nextPendingConnection()
+        if conn:
+            conn.waitForReadyRead(1000)
+            conn.close()
+        window.setWindowState(
+            (window.windowState() & ~Qt.WindowState.WindowMinimized)
+            | Qt.WindowState.WindowActive,
+        )
+        window.show()
+        window.raise_()
+        window.activateWindow()
+
+    _local_server.newConnection.connect(_on_second_instance)
 
     window.show()
 
