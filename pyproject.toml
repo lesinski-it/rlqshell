@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "rlqshell"
-version = "2.8.2"
+version = "2.8.7"
 description = "Modern cross-platform SSH client with private-cloud sync"
 readme = "README.md"
 license = {text = "MIT"}
