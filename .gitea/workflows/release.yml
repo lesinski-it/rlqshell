@@ -126,6 +126,16 @@ jobs:
             dist/RLQShell.exe
             dist/RLQShell-${{ steps.version.outputs.version }}-x64.msi
 
+      - name: Cleanup (Windows)
+        if: always()
+        shell: powershell
+        run: |
+          # Remove PyInstaller output — the MSI and EXE are already uploaded
+          Remove-Item -Recurse -Force dist, build -ErrorAction SilentlyContinue
+          # Purge pip wheel cache (PySide6 wheels are >500 MB)
+          pip cache purge
+          Write-Output "Cleanup done."
+
   build_linux:
     runs-on: [ubuntu-latest]
     outputs:
@@ -192,6 +202,16 @@ jobs:
           name: linux-dist
           if-no-files-found: error
           path: dist/rlqshell_${{ steps.version.outputs.version }}_amd64.deb
+
+      - name: Cleanup (Linux)
+        if: always()
+        shell: bash
+        run: |
+          # Remove PyInstaller output — the .deb is already uploaded
+          rm -rf dist/ build/
+          # Purge pip wheel cache (PySide6 wheels are >500 MB)
+          pip cache purge || true
+          echo "Cleanup done."
 
   publish:
     runs-on: ubuntu-latest
@@ -271,3 +291,10 @@ jobs:
         run: |
           set -euo pipefail
           python scripts/ftp_upload.py "${{ steps.version.outputs.version }}"
+
+      - name: Cleanup (publish)
+        if: always()
+        shell: bash
+        run: |
+          rm -rf dist/
+          echo "Cleanup done."
