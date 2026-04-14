@@ -580,8 +580,14 @@ def main() -> None:
     sync_engine.sync_completed.connect(_on_sync_completed)
 
     # Cleanup on close
-    async def _async_cleanup() -> None:
-        """Run async cleanup tasks (sync on close, provider shutdown)."""
+    async def _cleanup() -> None:
+        """Stop sync-unaware resources, run sync on close, then shut everything down."""
+        logger.info("Cleaning up resources…")
+        update_manager.stop()
+        tunnel_engine.stop_all()
+        connection_pool.close_all()
+
+        # Sync on close — awaited so the app stays alive until it finishes
         if (
             app.config.get("sync.sync_on_close", False)
             and sync_engine.provider
@@ -591,21 +597,13 @@ def main() -> None:
                 await sync_engine.sync()
             except Exception:
                 logger.warning("Sync on close failed", exc_info=True)
+
         try:
             await sync_engine.shutdown()
         except Exception:
             pass
 
-    def _cleanup() -> None:
-        logger.info("Cleaning up resources…")
-        update_manager.stop()
-        tunnel_engine.stop_all()
-        connection_pool.close_all()
-
-        # Schedule async cleanup — qasync loop is still running at this point
-        future = asyncio.ensure_future(_async_cleanup())
-        future.add_done_callback(lambda _: None)
-
+        # Lock vault only after sync is done (sync needs decrypted data)
         credential_store.lock()
         vault.close()
 

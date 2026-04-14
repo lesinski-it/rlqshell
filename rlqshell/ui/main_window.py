@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from PySide6.QtCore import QEasingCurve, QPropertyAnimation, QSize, Qt, QTimer, Signal
@@ -272,10 +273,19 @@ class MainWindow(QMainWindow):
                 event.ignore()
                 return
 
+        # Ignore the event now — we'll call QApplication.quit() after async cleanup.
+        event.ignore()
+        self.hide()
         logger.info("MainWindow closing")
-        if hasattr(self, "_cleanup_callback") and self._cleanup_callback:
-            try:
-                self._cleanup_callback()
-            except Exception:
-                logger.exception("Error during cleanup")
-        event.accept()
+
+        async def _run_cleanup_and_quit() -> None:
+            if hasattr(self, "_cleanup_callback") and self._cleanup_callback:
+                try:
+                    result = self._cleanup_callback()
+                    if asyncio.iscoroutine(result):
+                        await result
+                except Exception:
+                    logger.exception("Error during cleanup")
+            QApplication.instance().quit()
+
+        asyncio.ensure_future(_run_cleanup_and_quit())

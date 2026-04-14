@@ -93,7 +93,7 @@ class SyncSettings(QWidget):
         # Provider
         grid.addWidget(self._make_label("Provider"), row, 0, Qt.AlignmentFlag.AlignRight)
         self._provider_combo = QComboBox()
-        self._provider_combo.addItems(["None", "OneDrive", "Google Drive", "Dropbox"])
+        self._provider_combo.addItems(["None", "OneDrive"])  # Google Drive & Dropbox hidden (not yet available)
         self._provider_combo.setCurrentText(config.get("sync.provider", "None"))
         self._provider_combo.currentTextChanged.connect(self._on_provider_changed)
         grid.addWidget(self._provider_combo, row, 1)
