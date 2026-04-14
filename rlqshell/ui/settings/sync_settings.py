@@ -458,14 +458,13 @@ class SyncSettings(QWidget):
         if self._sync_engine and self._sync_engine.provider:
             asyncio.ensure_future(self._sync_engine.provider.disconnect())
             self._sync_engine.stop_auto_sync()
+            self._sync_engine.set_provider(None)
 
             # Clear persisted tokens
             provider_name = self._provider_combo.currentText()
             if self._token_store:
                 self._token_store.clear_tokens(provider_name)
 
-            self._save("sync.provider", "None")
-            self._provider_combo.setCurrentText("None")
             self._update_status()
 
     def _update_status(self) -> None:

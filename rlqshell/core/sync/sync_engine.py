@@ -126,9 +126,10 @@ class SyncEngine(QObject):
     def cloud_folder(self, value: str) -> None:
         self._cloud_folder = value
 
-    def set_provider(self, provider: AbstractCloudProvider) -> None:
+    def set_provider(self, provider: AbstractCloudProvider | None) -> None:
         self._provider = provider
-        self._state.set_provider(provider.provider_name)
+        if provider is not None:
+            self._state.set_provider(provider.provider_name)
 
     def set_token_save_callback(self, callback) -> None:
         """Set a callback to persist tokens after refresh. Signature: (str, str) -> None."""
