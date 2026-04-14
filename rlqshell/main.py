@@ -534,7 +534,10 @@ def main() -> None:
     sync_engine.vault_key_changed.connect(_on_vault_key_changed)
 
     def _on_sync_completed(stats: dict) -> None:
+        from rlqshell.ui.vault.history_view import HistoryView
         from rlqshell.ui.vault.keychain_view import KeychainView
+        from rlqshell.ui.vault.known_hosts_view import KnownHostsView
+        from rlqshell.ui.vault.port_forward_view import PortForwardView
         from rlqshell.ui.vault.snippet_list import SnippetListView
         from rlqshell.ui.widgets.toast import ToastManager
 
@@ -551,6 +554,12 @@ def main() -> None:
                 vault_page._keychain_section.refresh()
             if isinstance(vault_page._snippets_section, SnippetListView):
                 vault_page._snippets_section.refresh()
+            if isinstance(vault_page._known_hosts_section, KnownHostsView):
+                vault_page._known_hosts_section.refresh()
+            if isinstance(vault_page._port_fwd_section, PortForwardView):
+                vault_page._port_fwd_section.refresh()
+            if isinstance(vault_page._history_section, HistoryView):
+                vault_page._history_section.refresh()
 
         parts = []
         if added:

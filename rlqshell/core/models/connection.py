@@ -30,6 +30,8 @@ class ConnectionHistory:
     connected_at: datetime | None = None
     disconnected_at: datetime | None = None
     duration_seconds: int | None = None
+    sync_uuid: str | None = None
+    updated_at: datetime | None = None
 
 
 @dataclass

@@ -25,6 +25,7 @@ logger = logging.getLogger(__name__)
 _SYNC_FILES = ["vault.key", "config.json"]
 _SYNC_RECORDS_FILE = "sync_records_v2.json"
 _SYNC_IDENTITIES_FILE = "sync_identities_v1.json"
+_SYNC_AUXILIARY_FILE = "sync_auxiliary_v1.json"
 _TOMBSTONE_RETENTION_DAYS = 30
 
 _BOOL_FIELDS = {
@@ -262,8 +263,10 @@ class SyncEngine(QObject):
             # --- 2. Sync records (identities before hosts) ---
             identity_stats = await self._sync_identities_v1()
             sync_stats = await self._sync_records_v2()
+            auxiliary_stats = await self._sync_auxiliary_v1()
             for k in sync_stats:
                 sync_stats[k] += identity_stats.get(k, 0)
+                sync_stats[k] += auxiliary_stats.get(k, 0)
 
             db_path = self._data_dir / "rlqshell.db"
             local_hashes["rlqshell.db"] = SyncState.compute_file_hash(db_path)
@@ -1526,6 +1529,476 @@ class SyncEngine(QObject):
             await self._provider.upload_file(
                 str(tmp),
                 f"{self._cloud_folder}/{_SYNC_IDENTITIES_FILE}",
+            )
+        finally:
+            if tmp.exists():
+                tmp.unlink()
+
+    # ------------------------------------------------------------------
+    # Auxiliary sync  (sync_auxiliary_v1.json)
+    # port_forward_rules, known_hosts, connection_history
+    # ------------------------------------------------------------------
+
+    _AUXILIARY_ENTITY_TYPES = ("port_forward_rules", "known_hosts", "connection_history")
+    _HISTORY_SYNC_RETENTION_DAYS = 365
+
+    @staticmethod
+    def _empty_auxiliary_payload() -> dict[str, Any]:
+        return {
+            "version": 1,
+            "port_forward_rules": [],
+            "known_hosts": [],
+            "connection_history": [],
+            "tombstones": [],
+        }
+
+    def _export_auxiliary_records(self) -> dict[str, Any]:
+        payload = self._empty_auxiliary_payload()
+
+        with self._db.connection() as conn:
+            # --- Port Forward Rules ---
+            for row in conn.execute(
+                """SELECT pf.sync_uuid, pf.vault_id, pf.label, pf.direction,
+                          pf.bind_address, pf.local_port, pf.remote_host,
+                          pf.remote_port, pf.auto_start, pf.updated_at,
+                          h.sync_uuid AS host_sync_uuid
+                   FROM port_forward_rules pf
+                   LEFT JOIN hosts h ON h.id = pf.host_id
+                   WHERE pf.sync_uuid IS NOT NULL"""
+            ).fetchall():
+                payload["port_forward_rules"].append({
+                    "sync_uuid": row["sync_uuid"],
+                    "vault_id": row["vault_id"],
+                    "label": row["label"],
+                    "direction": row["direction"],
+                    "bind_address": row["bind_address"],
+                    "local_port": row["local_port"],
+                    "remote_host": row["remote_host"],
+                    "remote_port": row["remote_port"],
+                    "auto_start": bool(row["auto_start"]),
+                    "host_sync_uuid": row["host_sync_uuid"],
+                    "updated_at": self._normalize_ts(row["updated_at"]),
+                })
+
+            # --- Known Hosts ---
+            for row in conn.execute(
+                """SELECT sync_uuid, hostname, port, key_type,
+                          host_key, fingerprint, updated_at
+                   FROM known_hosts WHERE sync_uuid IS NOT NULL"""
+            ).fetchall():
+                payload["known_hosts"].append({
+                    "sync_uuid": row["sync_uuid"],
+                    "hostname": row["hostname"],
+                    "port": row["port"],
+                    "key_type": row["key_type"],
+                    "host_key": row["host_key"],
+                    "fingerprint": row["fingerprint"],
+                    "updated_at": self._normalize_ts(row["updated_at"]),
+                })
+
+            # --- Connection History (last N days) ---
+            retention = self._HISTORY_SYNC_RETENTION_DAYS
+            for row in conn.execute(
+                f"""SELECT ch.sync_uuid, ch.host_label, ch.address, ch.protocol,
+                           ch.connected_at, ch.disconnected_at, ch.duration_seconds,
+                           ch.updated_at,
+                           h.sync_uuid AS host_sync_uuid
+                    FROM connection_history ch
+                    LEFT JOIN hosts h ON h.id = ch.host_id
+                    WHERE ch.sync_uuid IS NOT NULL
+                      AND ch.connected_at > datetime('now', '-{retention} days')"""
+            ).fetchall():
+                payload["connection_history"].append({
+                    "sync_uuid": row["sync_uuid"],
+                    "host_label": row["host_label"],
+                    "address": row["address"],
+                    "protocol": row["protocol"],
+                    "connected_at": self._normalize_ts(row["connected_at"]),
+                    "disconnected_at": self._normalize_ts(row["disconnected_at"]),
+                    "duration_seconds": row["duration_seconds"],
+                    "host_sync_uuid": row["host_sync_uuid"],
+                    "updated_at": self._normalize_ts(row["updated_at"]),
+                })
+
+            # --- Tombstones ---
+            for row in conn.execute(
+                "SELECT entity_type, sync_uuid, deleted_at FROM sync_tombstones"
+                " WHERE entity_type IN ('port_forward_rules','known_hosts','connection_history')"
+            ).fetchall():
+                payload["tombstones"].append({
+                    "entity_type": row["entity_type"],
+                    "sync_uuid": row["sync_uuid"],
+                    "deleted_at": self._normalize_ts(row["deleted_at"]),
+                })
+
+        return payload
+
+    def _sanitize_auxiliary_payload(
+        self, payload: dict[str, Any] | None
+    ) -> dict[str, Any]:
+        if not isinstance(payload, dict):
+            return self._empty_auxiliary_payload()
+
+        out = self._empty_auxiliary_payload()
+        for key in self._AUXILIARY_ENTITY_TYPES + ("tombstones",):
+            values = payload.get(key, [])
+            if isinstance(values, list):
+                out[key] = [v for v in values if isinstance(v, dict)]
+
+        for entity in self._AUXILIARY_ENTITY_TYPES:
+            normalized: list[dict[str, Any]] = []
+            for rec in out[entity]:
+                sync_uuid = str(rec.get("sync_uuid", "")).strip()
+                if not sync_uuid:
+                    continue
+                item = dict(rec)
+                item["sync_uuid"] = sync_uuid
+                item["updated_at"] = self._normalize_ts(item.get("updated_at"))
+                normalized.append(item)
+            out[entity] = sorted(normalized, key=lambda r: r["sync_uuid"])
+
+        normalized_tombstones: list[dict[str, Any]] = []
+        for rec in out["tombstones"]:
+            entity_type = str(rec.get("entity_type", "")).strip()
+            sync_uuid = str(rec.get("sync_uuid", "")).strip()
+            if not entity_type or not sync_uuid:
+                continue
+            normalized_tombstones.append({
+                "entity_type": entity_type,
+                "sync_uuid": sync_uuid,
+                "deleted_at": self._normalize_ts(rec.get("deleted_at")),
+            })
+        out["tombstones"] = sorted(
+            normalized_tombstones,
+            key=lambda r: (r["entity_type"], r["sync_uuid"]),
+        )
+        return out
+
+    def _merge_auxiliary_payloads(
+        self, local: dict[str, Any], remote: dict[str, Any]
+    ) -> dict[str, Any]:
+        merged = self._empty_auxiliary_payload()
+
+        all_tombs: dict[tuple[str, str], str] = {}
+        for t in local.get("tombstones", []) + remote.get("tombstones", []):
+            key = (t["entity_type"], t["sync_uuid"])
+            existing = all_tombs.get(key, "")
+            if t["deleted_at"] > existing:
+                all_tombs[key] = t["deleted_at"]
+        merged["tombstones"] = sorted(
+            [
+                {"entity_type": k[0], "sync_uuid": k[1], "deleted_at": v}
+                for k, v in all_tombs.items()
+            ],
+            key=lambda r: (r["entity_type"], r["sync_uuid"]),
+        )
+
+        tomb_set = {
+            (t["entity_type"], t["sync_uuid"]) for t in merged["tombstones"]
+        }
+
+        for entity in self._AUXILIARY_ENTITY_TYPES:
+            local_map: dict[str, dict[str, Any]] = {
+                r["sync_uuid"]: r for r in local.get(entity, [])
+            }
+            remote_map: dict[str, dict[str, Any]] = {
+                r["sync_uuid"]: r for r in remote.get(entity, [])
+            }
+            all_uuids = set(local_map.keys()) | set(remote_map.keys())
+            result: list[dict[str, Any]] = []
+
+            for uuid in all_uuids:
+                if (entity, uuid) in tomb_set:
+                    continue
+                l_rec = local_map.get(uuid)
+                r_rec = remote_map.get(uuid)
+                if l_rec and not r_rec:
+                    result.append(l_rec)
+                elif r_rec and not l_rec:
+                    result.append(r_rec)
+                else:
+                    l_ts = self._parse_ts(l_rec["updated_at"])  # type: ignore[index]
+                    r_ts = self._parse_ts(r_rec["updated_at"])  # type: ignore[index]
+                    result.append(r_rec if r_ts > l_ts else l_rec)  # type: ignore[index]
+
+            merged[entity] = sorted(result, key=lambda r: r["sync_uuid"])
+
+        return merged
+
+    def _apply_merged_auxiliary_payload(
+        self, payload: dict[str, Any]
+    ) -> dict[str, int]:
+        stats = {"added": 0, "updated": 0, "deleted": 0, "pushed": 0}
+        with self._db.connection() as conn:
+            # --- Port Forward Rules ---
+            local_rules: dict[str, int] = {}
+            local_rules_ts: dict[str, str] = {}
+            for r in conn.execute(
+                "SELECT id, sync_uuid, updated_at FROM port_forward_rules"
+                " WHERE sync_uuid IS NOT NULL"
+            ).fetchall():
+                local_rules[r["sync_uuid"]] = r["id"]
+                local_rules_ts[r["sync_uuid"]] = r["updated_at"]
+
+            for rule in payload.get("port_forward_rules", []):
+                # Resolve host_id from host_sync_uuid
+                host_id = None
+                host_suid = rule.get("host_sync_uuid")
+                if host_suid:
+                    row = conn.execute(
+                        "SELECT id FROM hosts WHERE sync_uuid=?", (host_suid,)
+                    ).fetchone()
+                    if row:
+                        host_id = row["id"]
+                if host_id is None:
+                    continue  # host not yet synced — skip this rule
+
+                if rule["sync_uuid"] in local_rules:
+                    local_ts = self._normalize_ts(local_rules_ts.get(rule["sync_uuid"]))
+                    if local_ts == rule["updated_at"]:
+                        continue
+                    conn.execute(
+                        """UPDATE port_forward_rules SET
+                               host_id=?, label=?, direction=?, bind_address=?,
+                               local_port=?, remote_host=?, remote_port=?,
+                               auto_start=?, updated_at=? WHERE sync_uuid=?""",
+                        (
+                            host_id, rule.get("label"), rule["direction"],
+                            rule.get("bind_address", "127.0.0.1"),
+                            rule["local_port"], rule.get("remote_host"),
+                            rule.get("remote_port"),
+                            rule.get("auto_start", True),
+                            rule["updated_at"], rule["sync_uuid"],
+                        ),
+                    )
+                    stats["updated"] += 1
+                else:
+                    conn.execute(
+                        """INSERT INTO port_forward_rules
+                               (sync_uuid, vault_id, host_id, label, direction,
+                                bind_address, local_port, remote_host, remote_port,
+                                auto_start, updated_at)
+                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        (
+                            rule["sync_uuid"], rule.get("vault_id", 1),
+                            host_id, rule.get("label"), rule["direction"],
+                            rule.get("bind_address", "127.0.0.1"),
+                            rule["local_port"], rule.get("remote_host"),
+                            rule.get("remote_port"),
+                            rule.get("auto_start", True),
+                            rule["updated_at"],
+                        ),
+                    )
+                    stats["added"] += 1
+
+            tomb_rule_uuids = {
+                t["sync_uuid"]
+                for t in payload.get("tombstones", [])
+                if t["entity_type"] == "port_forward_rules"
+            }
+            for uuid in tomb_rule_uuids:
+                if uuid in local_rules:
+                    conn.execute(
+                        "DELETE FROM port_forward_rules WHERE sync_uuid=?", (uuid,)
+                    )
+                    stats["deleted"] += 1
+
+            # --- Known Hosts ---
+            local_kh: dict[str, int] = {}
+            local_kh_ts: dict[str, str] = {}
+            for r in conn.execute(
+                "SELECT id, sync_uuid, updated_at FROM known_hosts"
+                " WHERE sync_uuid IS NOT NULL"
+            ).fetchall():
+                local_kh[r["sync_uuid"]] = r["id"]
+                local_kh_ts[r["sync_uuid"]] = r["updated_at"]
+
+            for kh in payload.get("known_hosts", []):
+                if kh["sync_uuid"] in local_kh:
+                    local_ts = self._normalize_ts(local_kh_ts.get(kh["sync_uuid"]))
+                    if local_ts == kh["updated_at"]:
+                        continue
+                    conn.execute(
+                        """UPDATE known_hosts SET key_type=?, host_key=?,
+                               fingerprint=?, hostname=?, port=?, updated_at=?
+                           WHERE sync_uuid=?""",
+                        (
+                            kh["key_type"], kh.get("host_key", ""),
+                            kh.get("fingerprint"), kh["hostname"], kh["port"],
+                            kh["updated_at"], kh["sync_uuid"],
+                        ),
+                    )
+                    stats["updated"] += 1
+                else:
+                    # Check for (hostname, port) collision — same host added independently
+                    dup = conn.execute(
+                        "SELECT id, sync_uuid, updated_at FROM known_hosts"
+                        " WHERE hostname=? AND port=?",
+                        (kh["hostname"], kh["port"]),
+                    ).fetchone()
+                    if dup:
+                        # Remote has a different sync_uuid for same host — keep newer
+                        dup_ts = self._normalize_ts(dup["updated_at"])
+                        if kh["updated_at"] > dup_ts:
+                            conn.execute(
+                                "DELETE FROM known_hosts WHERE id=?", (dup["id"],)
+                            )
+                        else:
+                            continue  # local is newer — skip remote
+                    conn.execute(
+                        """INSERT INTO known_hosts
+                               (sync_uuid, hostname, port, key_type, host_key,
+                                fingerprint, updated_at)
+                           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                        (
+                            kh["sync_uuid"], kh["hostname"], kh["port"],
+                            kh["key_type"], kh.get("host_key", ""),
+                            kh.get("fingerprint"), kh["updated_at"],
+                        ),
+                    )
+                    stats["added"] += 1
+
+            tomb_kh_uuids = {
+                t["sync_uuid"]
+                for t in payload.get("tombstones", [])
+                if t["entity_type"] == "known_hosts"
+            }
+            for uuid in tomb_kh_uuids:
+                if uuid in local_kh:
+                    conn.execute(
+                        "DELETE FROM known_hosts WHERE sync_uuid=?", (uuid,)
+                    )
+                    stats["deleted"] += 1
+
+            # --- Connection History ---
+            local_ch: dict[str, int] = {}
+            local_ch_ts: dict[str, str] = {}
+            for r in conn.execute(
+                "SELECT id, sync_uuid, updated_at FROM connection_history"
+                " WHERE sync_uuid IS NOT NULL"
+            ).fetchall():
+                local_ch[r["sync_uuid"]] = r["id"]
+                local_ch_ts[r["sync_uuid"]] = r["updated_at"]
+
+            for ch in payload.get("connection_history", []):
+                # Resolve host_id (optional — NULL is fine per schema)
+                host_id = None
+                host_suid = ch.get("host_sync_uuid")
+                if host_suid:
+                    row = conn.execute(
+                        "SELECT id FROM hosts WHERE sync_uuid=?", (host_suid,)
+                    ).fetchone()
+                    if row:
+                        host_id = row["id"]
+
+                if ch["sync_uuid"] in local_ch:
+                    local_ts = self._normalize_ts(local_ch_ts.get(ch["sync_uuid"]))
+                    if local_ts == ch["updated_at"]:
+                        continue
+                    conn.execute(
+                        """UPDATE connection_history SET
+                               host_id=?, host_label=?, address=?, protocol=?,
+                               connected_at=?, disconnected_at=?,
+                               duration_seconds=?, updated_at=?
+                           WHERE sync_uuid=?""",
+                        (
+                            host_id, ch.get("host_label"), ch.get("address"),
+                            ch.get("protocol", "ssh"),
+                            ch.get("connected_at"), ch.get("disconnected_at"),
+                            ch.get("duration_seconds"),
+                            ch["updated_at"], ch["sync_uuid"],
+                        ),
+                    )
+                    stats["updated"] += 1
+                else:
+                    conn.execute(
+                        """INSERT INTO connection_history
+                               (sync_uuid, host_id, host_label, address, protocol,
+                                connected_at, disconnected_at, duration_seconds,
+                                updated_at)
+                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        (
+                            ch["sync_uuid"], host_id, ch.get("host_label"),
+                            ch.get("address"), ch.get("protocol", "ssh"),
+                            ch.get("connected_at"), ch.get("disconnected_at"),
+                            ch.get("duration_seconds"), ch["updated_at"],
+                        ),
+                    )
+                    stats["added"] += 1
+
+            tomb_ch_uuids = {
+                t["sync_uuid"]
+                for t in payload.get("tombstones", [])
+                if t["entity_type"] == "connection_history"
+            }
+            for uuid in tomb_ch_uuids:
+                if uuid in local_ch:
+                    conn.execute(
+                        "DELETE FROM connection_history WHERE sync_uuid=?", (uuid,)
+                    )
+                    stats["deleted"] += 1
+
+            # --- Persist tombstones ---
+            for t in payload.get("tombstones", []):
+                conn.execute(
+                    """INSERT OR REPLACE INTO sync_tombstones
+                       (entity_type, sync_uuid, deleted_at) VALUES (?, ?, ?)""",
+                    (t["entity_type"], t["sync_uuid"], t["deleted_at"]),
+                )
+
+            conn.commit()
+        logger.info("Applied merged auxiliary payload to local DB")
+        return stats
+
+    async def _sync_auxiliary_v1(self) -> dict[str, int]:
+        """Sync port_forward_rules, known_hosts, connection_history."""
+        local_payload = self._sanitize_auxiliary_payload(
+            self._export_auxiliary_records()
+        )
+        remote_payload = self._sanitize_auxiliary_payload(
+            await self._download_auxiliary()
+        )
+        merged_payload = self._merge_auxiliary_payloads(local_payload, remote_payload)
+
+        stats: dict[str, int] = {
+            "added": 0, "updated": 0, "deleted": 0, "pushed": 0,
+        }
+        if self._payload_hash(local_payload) != self._payload_hash(merged_payload):
+            stats = self._apply_merged_auxiliary_payload(merged_payload)
+
+        if self._payload_hash(remote_payload) != self._payload_hash(merged_payload):
+            for entity in self._AUXILIARY_ENTITY_TYPES:
+                remote_uuids = {
+                    r["sync_uuid"] for r in remote_payload.get(entity, [])
+                }
+                for r in merged_payload.get(entity, []):
+                    if r["sync_uuid"] not in remote_uuids:
+                        stats["pushed"] += 1
+            await self._upload_auxiliary(merged_payload)
+
+        return stats
+
+    async def _download_auxiliary(self) -> dict[str, Any]:
+        tmp = self._data_dir / ".sync_auxiliary_remote.json"
+        try:
+            await self._provider.download_file(
+                f"{self._cloud_folder}/{_SYNC_AUXILIARY_FILE}",
+                str(tmp),
+            )
+            return json.loads(tmp.read_text(encoding="utf-8"))
+        except Exception:
+            return self._empty_auxiliary_payload()
+        finally:
+            if tmp.exists():
+                tmp.unlink()
+
+    async def _upload_auxiliary(self, payload: dict[str, Any]) -> None:
+        tmp = self._data_dir / ".sync_auxiliary_upload.json"
+        tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        try:
+            await self._provider.upload_file(
+                str(tmp),
+                f"{self._cloud_folder}/{_SYNC_AUXILIARY_FILE}",
             )
         finally:
             if tmp.exists():

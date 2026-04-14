@@ -189,7 +189,9 @@ CREATE TABLE IF NOT EXISTS port_forward_rules (
     remote_host TEXT,
     remote_port INTEGER,
     auto_start BOOLEAN DEFAULT 1,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    sync_uuid TEXT UNIQUE,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 -- === KNOWN HOSTS ===
@@ -202,7 +204,9 @@ CREATE TABLE IF NOT EXISTS known_hosts (
     host_key TEXT NOT NULL,
     fingerprint TEXT,
     first_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    sync_uuid TEXT UNIQUE,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 -- === HISTORY ===
@@ -215,7 +219,9 @@ CREATE TABLE IF NOT EXISTS connection_history (
     protocol TEXT,
     connected_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     disconnected_at TIMESTAMP,
-    duration_seconds INTEGER
+    duration_seconds INTEGER,
+    sync_uuid TEXT UNIQUE,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE IF NOT EXISTS command_history (
@@ -260,6 +266,10 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_tags_sync_uuid ON tags(sync_uuid);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_hosts_sync_uuid ON hosts(sync_uuid);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_host_tags_sync_uuid ON host_tags(sync_uuid);
 CREATE INDEX IF NOT EXISTS idx_tombstones_deleted_at ON sync_tombstones(deleted_at);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_port_forward_rules_sync_uuid ON port_forward_rules(sync_uuid);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_known_hosts_sync_uuid ON known_hosts(sync_uuid);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_connection_history_sync_uuid ON connection_history(sync_uuid);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_known_hosts_host_port ON known_hosts(hostname, port);
 """
 
 
@@ -394,6 +404,14 @@ class Database:
         _add_column_if_missing("snippets", "sync_uuid", "sync_uuid TEXT")
         _add_column_if_missing("snippets", "updated_at", "updated_at TIMESTAMP")
 
+        # Auxiliary sync (port_forward_rules, known_hosts, connection_history)
+        _add_column_if_missing("port_forward_rules", "sync_uuid", "sync_uuid TEXT")
+        _add_column_if_missing("port_forward_rules", "updated_at", "updated_at TIMESTAMP")
+        _add_column_if_missing("known_hosts", "sync_uuid", "sync_uuid TEXT")
+        _add_column_if_missing("known_hosts", "updated_at", "updated_at TIMESTAMP")
+        _add_column_if_missing("connection_history", "sync_uuid", "sync_uuid TEXT")
+        _add_column_if_missing("connection_history", "updated_at", "updated_at TIMESTAMP")
+
         conn.execute(
             "UPDATE groups_ "
             "SET updated_at = COALESCE(updated_at, created_at, CURRENT_TIMESTAMP)"
@@ -424,6 +442,18 @@ class Database:
         conn.execute(
             "UPDATE snippets "
             "SET updated_at = COALESCE(updated_at, created_at, CURRENT_TIMESTAMP)"
+        )
+        conn.execute(
+            "UPDATE port_forward_rules "
+            "SET updated_at = COALESCE(updated_at, created_at, CURRENT_TIMESTAMP)"
+        )
+        conn.execute(
+            "UPDATE known_hosts "
+            "SET updated_at = COALESCE(updated_at, last_seen, first_seen, CURRENT_TIMESTAMP)"
+        )
+        conn.execute(
+            "UPDATE connection_history "
+            "SET updated_at = COALESCE(updated_at, connected_at, CURRENT_TIMESTAMP)"
         )
 
         for row in conn.execute(
@@ -468,6 +498,15 @@ class Database:
                     (str(uuid4()), row[0]),
                 )
 
+        for table in ("port_forward_rules", "known_hosts", "connection_history"):
+            for row in conn.execute(
+                f"SELECT id FROM {table} WHERE sync_uuid IS NULL OR sync_uuid = ''"
+            ).fetchall():
+                conn.execute(
+                    f"UPDATE {table} SET sync_uuid=? WHERE id=?",
+                    (str(uuid4()), row[0]),
+                )
+
         conn.execute(
             """CREATE TABLE IF NOT EXISTS sync_tombstones (
                 entity_type TEXT NOT NULL,
@@ -498,6 +537,22 @@ class Database:
         )
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_tombstones_deleted_at ON sync_tombstones(deleted_at)"
+        )
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS"
+            " idx_port_forward_rules_sync_uuid ON port_forward_rules(sync_uuid)"
+        )
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS"
+            " idx_known_hosts_sync_uuid ON known_hosts(sync_uuid)"
+        )
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS"
+            " idx_connection_history_sync_uuid ON connection_history(sync_uuid)"
+        )
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS"
+            " idx_known_hosts_host_port ON known_hosts(hostname, port)"
         )
         conn.commit()
 

@@ -21,3 +21,5 @@ class PortForwardRule:
     remote_port: int | None = None
     auto_start: bool = True
     created_at: datetime | None = None
+    sync_uuid: str | None = None
+    updated_at: datetime | None = None
