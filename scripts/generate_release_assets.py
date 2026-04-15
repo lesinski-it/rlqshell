@@ -149,7 +149,7 @@ def generate_index_html(version: str, exe: Path, msi: Path, deb: Path) -> str:
         <div class="sha" style="margin-top:0.8rem">SHA256: {deb_hash}</div>
       </div>
     </div>
-    <div class="footer">RLQ IT - update.lesinski.it</div>
+    <div class="footer">update.lesinski.it</div>
   </div>
 </body>
 </html>
