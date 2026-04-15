@@ -22,8 +22,7 @@ import shutil
 import sys
 from pathlib import Path
 
-
-DEFAULT_FTP_BASE_DIR = "/home/lesinski_it_rlqbackup/public_html/rlqshell"
+DEFAULT_FTP_BASE_DIR = "/public_html/rlqshell"
 UPDATE_HOST = "update.lesinski.it"
 
 
