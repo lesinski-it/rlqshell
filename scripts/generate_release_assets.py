@@ -126,7 +126,7 @@ def generate_index_html(version: str, exe: Path, msi: Path, deb: Path) -> str:
   <div class="container">
     <div class="header">
       <h1>RLQShell</h1>
-      <p>Nowoczesny klient SSH z synchronizacja przez prywatna chmure</p>
+      <p>Klient SSH z synchronizacja przez prywatna chmure</p>
       <div class="version-badge">v{version} - {release_date}</div>
     </div>
     <div class="content">
