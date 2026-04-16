@@ -81,11 +81,11 @@ One feature shipped per month:
 
 | Month | Feature |
 |-------|---------|
-| May 2026 | ☁️ Google Drive Sync — stable sync with conflict resolution |
-| June 2026 | ☁️ Dropbox Sync — stable sync, unified provider API |
-| August 2026 | 🪜 SSH Jump Host / Bastion (ProxyJump) |
-| October 2026 | 🍎 macOS — App Bundle + DMG packaging |
-| December 2026 | 🐧 Linux — AppImage / Flatpak packaging |
+| May 2026 | Google Drive Sync — stable sync with conflict resolution |
+| June 2026 | Dropbox Sync — stable sync, unified provider API |
+| August 2026 | SSH Jump Host / Bastion (ProxyJump) |
+| October 2026 | macOS — App Bundle + DMG packaging |
+| December 2026 | Linux — AppImage / Flatpak packaging |
 
 ---
 
