@@ -1,6 +1,6 @@
 {
-    "rlqshell-default": {
-        "name": "RLQShell Default",
+    "rlqDefault": {
+        "name": "RLQ Default",
         "foreground": "#cdd6f4",
         "background": "#1e1e2e",
         "cursor": "#f5e0dc",
@@ -22,8 +22,8 @@
         "bright_cyan": "#94e2d5",
         "bright_white": "#a6adc8"
     },
-    "solarized-dark": {
-        "name": "Solarized Dark",
+    "rlqDeepTide": {
+        "name": "RLQ Deep Tide",
         "foreground": "#839496",
         "background": "#002b36",
         "cursor": "#839496",
@@ -45,8 +45,8 @@
         "bright_cyan": "#93a1a1",
         "bright_white": "#fdf6e3"
     },
-    "monokai": {
-        "name": "Monokai",
+    "rlqNeonJungle": {
+        "name": "RLQ Neon Jungle",
         "foreground": "#f8f8f2",
         "background": "#272822",
         "cursor": "#f8f8f2",
@@ -68,8 +68,8 @@
         "bright_cyan": "#a1efe4",
         "bright_white": "#f9f8f5"
     },
-    "dracula": {
-        "name": "Dracula",
+    "rlqPurpleHaze": {
+        "name": "RLQ Purple Haze",
         "foreground": "#f8f8f2",
         "background": "#282a36",
         "cursor": "#f8f8f2",
@@ -90,5 +90,51 @@
         "bright_magenta": "#ff92df",
         "bright_cyan": "#a4ffff",
         "bright_white": "#ffffff"
+    },
+    "rlqDawnLight": {
+        "name": "RLQ Dawn Light",
+        "foreground": "#383a42",
+        "background": "#ffffff",
+        "cursor": "#526fff",
+        "selection": "#d0d7e8",
+        "black": "#383a42",
+        "red": "#e45649",
+        "green": "#50a14f",
+        "yellow": "#c18401",
+        "blue": "#4078f2",
+        "magenta": "#a626a4",
+        "cyan": "#0184bc",
+        "white": "#fafafa",
+        "bright_black": "#4f525e",
+        "bright_red": "#e06c75",
+        "bright_green": "#6ab46a",
+        "bright_yellow": "#d09020",
+        "bright_blue": "#526fff",
+        "bright_magenta": "#b842b8",
+        "bright_cyan": "#2196c4",
+        "bright_white": "#ffffff"
+    },
+    "rlqSilverMist": {
+        "name": "RLQ Silver Mist",
+        "foreground": "#3c4048",
+        "background": "#f2f2f4",
+        "cursor": "#5c7cfa",
+        "selection": "#dce0ea",
+        "black": "#3c4048",
+        "red": "#c0392b",
+        "green": "#27ae60",
+        "yellow": "#d4870b",
+        "blue": "#2980b9",
+        "magenta": "#8e44ad",
+        "cyan": "#16a085",
+        "white": "#ecf0f1",
+        "bright_black": "#5a6270",
+        "bright_red": "#e74c3c",
+        "bright_green": "#2ecc71",
+        "bright_yellow": "#f39c12",
+        "bright_blue": "#3498db",
+        "bright_magenta": "#9b59b6",
+        "bright_cyan": "#1abc9c",
+        "bright_white": "#f8f9fa"
     }
 }

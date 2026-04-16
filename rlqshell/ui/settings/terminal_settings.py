@@ -92,9 +92,10 @@ class TerminalSettings(QWidget):
         # Color scheme
         self._scheme = QComboBox()
         self._scheme.addItems([
-            "rlqshell-default", "solarized-dark", "monokai", "dracula",
+            "rlqDefault", "rlqDeepTide", "rlqNeonJungle", "rlqPurpleHaze",
+            "rlqDawnLight", "rlqSilverMist",
         ])
-        self._scheme.setCurrentText(config.get("terminal.color_scheme", "rlqshell-default"))
+        self._scheme.setCurrentText(config.get("terminal.color_scheme", "rlqDefault"))
         self._scheme.currentTextChanged.connect(
             lambda v: self._save("terminal.color_scheme", v)
         )

@@ -340,7 +340,7 @@ class TerminalWidget(QWidget):
             self._cursor_visible = True
 
         # Color scheme
-        scheme_name = config.get("terminal.color_scheme", "rlqshell-default")
+        scheme_name = config.get("terminal.color_scheme", "rlqDefault")
         self._apply_color_scheme(scheme_name)
 
         self.update()
