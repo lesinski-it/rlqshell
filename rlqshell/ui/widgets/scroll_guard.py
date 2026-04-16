@@ -3,16 +3,22 @@
 from __future__ import annotations
 
 from PySide6.QtCore import QEvent, QObject, Qt
-from PySide6.QtWidgets import QAbstractSpinBox, QComboBox, QWidget
+from PySide6.QtWidgets import QAbstractSpinBox, QApplication, QComboBox, QWidget
 
 
 class _WheelGuard(QObject):
-    """Event filter that ignores wheel events so the parent scroll area handles them."""
+    """Event filter that blocks wheel events on combo/spin boxes.
+
+    Returns True to prevent the widget from changing its value, then forwards
+    the event to the parent so the enclosing QScrollArea can scroll normally.
+    """
 
     def eventFilter(self, obj: QObject, event: QEvent) -> bool:  # noqa: N802
         if event.type() == QEvent.Type.Wheel:
-            event.ignore()
-            return False
+            parent = obj.parentWidget()
+            if parent is not None:
+                QApplication.sendEvent(parent, event)
+            return True  # block widget from handling it
         return super().eventFilter(obj, event)
 
 
