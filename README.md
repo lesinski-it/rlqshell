@@ -2,7 +2,7 @@
 
 # RLQShell
 
-**Modern cross-platform SSH client with private-cloud sync**
+**Cross-platform SSH client with private-cloud sync**
 
 *Your keys. Your cloud. Zero subscription.*
 
@@ -26,10 +26,10 @@
 
 ### Connection Management
 - **Host Vault** — organize hosts into groups and tags with fast fuzzy search
-- **Snippets** — saved commands with variable substitution (`$VAR`, prompt on connect)
+- **Commands** — saved commands with variable substitution (`$VAR`, prompt on connect)
 - **SSH Keychain** — generate, import and export SSH keys (RSA, Ed25519, ECDSA)
-- **Port Forwarding** — local, remote and dynamic (SOCKS) rules with one-click toggle
-- **Connection History** — recent hosts and per-session command history
+- **Tunelling** — local, remote and dynamic (SOCKS) rules with one-click toggle
+- **Activity History** — recent hosts and per-session command history
 
 ### Private Cloud Sync
 - End-to-end **AES-256 encryption** (Fernet) before any data leaves your machine
@@ -83,11 +83,8 @@ One feature shipped per month:
 |-------|---------|
 | May 2026 | ☁️ Google Drive Sync — stable sync with conflict resolution |
 | June 2026 | ☁️ Dropbox Sync — stable sync, unified provider API |
-| July 2026 | 🔐 Password import — KeePass, Bitwarden, PuTTY config |
 | August 2026 | 🪜 SSH Jump Host / Bastion (ProxyJump) |
-| September 2026 | 🎬 Session recording (asciinema-compatible) |
 | October 2026 | 🍎 macOS — App Bundle + DMG packaging |
-| November 2026 | 🔑 TOTP / 2FA for SSH connections |
 | December 2026 | 🐧 Linux — AppImage / Flatpak packaging |
 
 ---
@@ -129,4 +126,4 @@ RLQShell is free and open-source. If you find it useful, consider supporting the
 
 ## License
 
-MIT © 2024–2026 Rafal Lesinski — see [LICENSE](LICENSE)
+MIT © 2024–2026 Lesinski.it — see [LICENSE](LICENSE)
