@@ -4,11 +4,11 @@ from pathlib import Path
 
 # App metadata
 APP_NAME = "RLQShell"
-APP_VERSION = "2.9.21"
+APP_VERSION = "2.9.22"
 ORGANIZATION_NAME = "RLQShell"
 APP_AUTHOR = "Ravczy"
 APP_AUTHOR_WEBSITE = "https://www.lesinski.it"
-APP_DONATE_URL = "https://lesinski.it/donate"
+APP_DONATE_URL = "https://lesinski.it/software/rlqshell"
 APP_PRIVACY_URL = "https://lesinski.it/privacy-policy"
 APP_LICENSES_URL = "https://lesinski.it/rlqshell/licenses"
 
