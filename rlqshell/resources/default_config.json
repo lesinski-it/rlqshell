@@ -1,0 +1,71 @@
+{
+    "terminal": {
+        "font": "JetBrains Mono",
+        "font_size": 13,
+        "scrollback": 10000,
+        "cursor_style": "block",
+        "cursor_blink": true,
+        "ligatures": false,
+        "autocomplete": true,
+        "bell": "visual"
+    },
+    "appearance": {
+        "theme": "auto",
+        "palette": "amber",
+        "terminal_scheme": "rlqshell-default",
+        "ui_font": "Inter",
+        "opacity": 100
+    },
+    "general": {
+        "language": "en",
+        "confirm_close_app": true,
+        "confirm_close_tab": true,
+        "auto_save": true,
+        "auto_save_interval": 1000,
+        "startup_page": "vault"
+    },
+    "ssh": {
+        "default_port": 22,
+        "keep_alive": 60,
+        "compression": false,
+        "agent_forwarding": false,
+        "connection_timeout": 15,
+        "terminal_type": "xterm-256color"
+    },
+    "sync": {
+        "enabled": false,
+        "provider": null,
+        "auto_sync": false,
+        "auto_sync_interval": 300,
+        "sync_on_start": false,
+        "sync_on_close": false,
+        "cloud_folder": "/RLQShell",
+        "conflict_strategy": "last_write_wins",
+        "proxy_enabled": false,
+        "proxy_url": ""
+    },
+    "updates": {
+        "auto_check": true,
+        "check_interval_hours": 24
+    },
+    "keybindings": {
+        "command_palette": "Ctrl+K",
+        "jump_to_tab": "Ctrl+J",
+        "new_connection": "Ctrl+T",
+        "close_tab": "Ctrl+W",
+        "next_tab": "Ctrl+Tab",
+        "prev_tab": "Ctrl+Shift+Tab",
+        "split_vertical": "Ctrl+Shift+E",
+        "split_horizontal": "Ctrl+Shift+O",
+        "broadcast_mode": "Ctrl+Shift+B",
+        "search_terminal": "Ctrl+Shift+F",
+        "copy": "Ctrl+Shift+C",
+        "paste": "Ctrl+Shift+V",
+        "toggle_side_panel": "Ctrl+S",
+        "settings": "Ctrl+,",
+        "new_host": "Ctrl+N",
+        "new_snippet": "Ctrl+Shift+N",
+        "reconnect": "F5",
+        "fullscreen": "F11"
+    }
+}
