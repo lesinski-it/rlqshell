@@ -26,6 +26,7 @@ from rlqshell.core.credential_store import CredentialStore
 from rlqshell.core.host_manager import HostManager
 from rlqshell.core.keychain import Keychain
 from rlqshell.core.models.host import Host, Tag
+from rlqshell.ui.widgets.scroll_guard import install_scroll_guard
 from rlqshell.ui.widgets.tag_widget import TagSelector
 
 logger = logging.getLogger(__name__)
@@ -256,6 +257,16 @@ class HostEditorContent(QWidget):
         delete_btn.clicked.connect(self._on_delete)
         btn_row.addWidget(delete_btn)
         self._form_layout.addLayout(btn_row)
+
+        install_scroll_guard(
+            self._protocol_combo,
+            self._port_spin,
+            self._identity_combo,
+            self._group_combo,
+            self._keep_alive_spin,
+            self._rdp_resolution_combo,
+            self._rdp_color_depth_combo,
+        )
 
         scroll.setWidget(form)
 
