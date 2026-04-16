@@ -46,3 +46,10 @@ splash_test.png
 .claude/
 CLAUDE.md
 todo.txt
+
+# Virtual environment (actual project venv)
+.venv313/
+
+# Internal docs — not published to public GitHub
+docs/rlqshell-spec.md
+docs/build-linux-deb.md
