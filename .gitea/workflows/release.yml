@@ -110,11 +110,11 @@ jobs:
           }
           wix extension list -g
 
-      - name: Build MSI (WiX)
+      - name: Build MSI (WiX) + Sign
         shell: powershell
         run: |
           $v = "${{ steps.version.outputs.version }}"
-          & installer/build-msi.ps1 -Version $v
+          & installer/build-msi.ps1 -Version $v -Sign
           if ($LASTEXITCODE -ne 0) { throw "build-msi.ps1 failed" }
 
       - name: Upload Windows artifacts
