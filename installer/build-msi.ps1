@@ -21,7 +21,9 @@
 [CmdletBinding()]
 param(
     [switch]$Rebuild,
-    [string]$Version
+    [switch]$Sign,
+    [string]$Version,
+    [string]$TimestampUrl = 'http://time.certum.pl'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -32,6 +34,27 @@ $RepoRoot  = Split-Path -Parent $ScriptDir
 Set-Location $RepoRoot
 
 Write-Host "==> Repo root: $RepoRoot" -ForegroundColor Cyan
+
+# --- Locate signtool if signing is requested ---------------------------------
+function Invoke-Sign {
+    param([string]$FilePath)
+
+    if (-not $Sign) { return }
+
+    if (-not $script:SignTool) {
+        $candidate = Get-ChildItem 'C:\Program Files (x86)\Windows Kits\10\bin' -Recurse -Filter 'signtool.exe' -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -match '\\x64\\' } |
+            Sort-Object FullName -Descending |
+            Select-Object -First 1
+        if (-not $candidate) { throw "signtool.exe not found. Install Windows SDK." }
+        $script:SignTool = $candidate.FullName
+        Write-Host "==> SignTool: $($script:SignTool)" -ForegroundColor Cyan
+    }
+
+    Write-Host "==> Signing: $FilePath" -ForegroundColor Cyan
+    & $script:SignTool sign /fd sha256 /tr $TimestampUrl /td sha256 /v $FilePath
+    if ($LASTEXITCODE -ne 0) { throw "Signing failed: $FilePath" }
+}
 
 # --- Resolve version ---------------------------------------------------------
 if (-not $Version) {
@@ -66,6 +89,7 @@ if ($Rebuild) {
 if (-not (Test-Path $SourceExe)) {
     throw "Missing $SourceExe. Run with -Rebuild or build it first."
 }
+Invoke-Sign $SourceExe
 
 # --- Paths for WiX variables -------------------------------------------------
 $IconFile   = Join-Path $RepoRoot 'rlqshell\resources\images\app_icon.ico'
@@ -93,6 +117,8 @@ wix build `
     $WxsFile
 
 if ($LASTEXITCODE -ne 0) { throw "wix build failed" }
+
+Invoke-Sign $OutputMsi
 
 $size = [math]::Round(((Get-Item $OutputMsi).Length / 1MB), 1)
 Write-Host ""

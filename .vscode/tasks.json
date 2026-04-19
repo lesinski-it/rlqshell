@@ -1,0 +1,68 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "Build MSI",
+            "type": "shell",
+            "command": "pwsh",
+            "args": ["-NonInteractive", "-File", "${workspaceFolder}/installer/build-msi.ps1"],
+            "group": "build",
+            "presentation": { "reveal": "always", "panel": "shared" },
+            "problemMatcher": []
+        },
+        {
+            "label": "Build MSI + Sign",
+            "type": "shell",
+            "command": "pwsh",
+            "args": ["-NonInteractive", "-File", "${workspaceFolder}/installer/build-msi.ps1", "-Sign"],
+            "group": { "kind": "build", "isDefault": true },
+            "presentation": { "reveal": "always", "panel": "shared" },
+            "problemMatcher": []
+        },
+        {
+            "label": "Rebuild EXE + Build MSI + Sign",
+            "type": "shell",
+            "command": "pwsh",
+            "args": ["-NonInteractive", "-File", "${workspaceFolder}/installer/build-msi.ps1", "-Rebuild", "-Sign"],
+            "group": "build",
+            "presentation": { "reveal": "always", "panel": "shared" },
+            "problemMatcher": []
+        },
+        {
+            "label": "Sign EXE",
+            "type": "shell",
+            "command": "pwsh",
+            "args": [
+                "-NonInteractive", "-Command",
+                "& 'C:\\Program Files (x86)\\Windows Kits\\10\\bin\\10.0.26100.0\\x64\\signtool.exe' sign /fd sha256 /tr http://time.certum.pl /td sha256 /v '${workspaceFolder}\\dist\\RLQShell.exe'"
+            ],
+            "group": "none",
+            "presentation": { "reveal": "always", "panel": "shared" },
+            "problemMatcher": []
+        },
+        {
+            "label": "Sign MSI",
+            "type": "shell",
+            "command": "pwsh",
+            "args": [
+                "-NonInteractive", "-Command",
+                "$msi = Get-ChildItem '${workspaceFolder}\\dist\\RLQShell-*-x64.msi' | Sort-Object LastWriteTime -Descending | Select-Object -First 1 -ExpandProperty FullName; if (-not $msi) { throw 'No MSI found in dist\\' }; Write-Host \"Signing: $msi\"; & 'C:\\Program Files (x86)\\Windows Kits\\10\\bin\\10.0.26100.0\\x64\\signtool.exe' sign /fd sha256 /tr http://time.certum.pl /td sha256 /v $msi"
+            ],
+            "group": "none",
+            "presentation": { "reveal": "always", "panel": "shared" },
+            "problemMatcher": []
+        },
+        {
+            "label": "Verify Signatures",
+            "type": "shell",
+            "command": "pwsh",
+            "args": [
+                "-NonInteractive", "-Command",
+                "$st = 'C:\\Program Files (x86)\\Windows Kits\\10\\bin\\10.0.26100.0\\x64\\signtool.exe'; $exe = '${workspaceFolder}\\dist\\RLQShell.exe'; $msi = Get-ChildItem '${workspaceFolder}\\dist\\RLQShell-*-x64.msi' | Sort-Object LastWriteTime -Descending | Select-Object -First 1 -ExpandProperty FullName; if (Test-Path $exe) { Write-Host '--- EXE ---'; & $st verify /pa /v $exe }; if ($msi) { Write-Host '--- MSI ---'; & $st verify /pa /v $msi }"
+            ],
+            "group": "none",
+            "presentation": { "reveal": "always", "panel": "shared" },
+            "problemMatcher": []
+        }
+    ]
+}
