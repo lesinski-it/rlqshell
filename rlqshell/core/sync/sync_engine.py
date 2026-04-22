@@ -2139,7 +2139,9 @@ class SyncEngine(QObject):
             db_path = self._data_dir / "rlqshell.db"
             local_hashes["rlqshell.db"] = SyncState.compute_file_hash(db_path)
 
-            new_epoch = self._state.local_epoch + 1
+            remote_meta = await self._get_remote_meta()
+            remote_epoch = remote_meta.get("epoch", 0) if remote_meta else 0
+            new_epoch = max(self._state.local_epoch, remote_epoch) + 1
             meta = self._state.build_meta(
                 APP_VERSION,
                 local_hashes.get("rlqshell.db", ""),

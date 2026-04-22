@@ -15,7 +15,7 @@ from rlqshell.app.constants import APP_VERSION
 class BackupManager:
     """Creates and restores ZIP archives of user data files."""
 
-    _EXTRA_FILES = ["vault.key", "config.json", "sync_state.json"]
+    _EXTRA_FILES = ["vault.key", "config.json"]
     _META_FILE = "backup_meta.json"
 
     def __init__(self, data_dir: Path) -> None:
