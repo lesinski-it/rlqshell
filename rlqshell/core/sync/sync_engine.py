@@ -2004,6 +2004,92 @@ class SyncEngine(QObject):
             if tmp.exists():
                 tmp.unlink()
 
+    async def force_push(self) -> None:
+        """Upload all local data to cloud without downloading, overwriting cloud state.
+
+        Used after a backup restore so the cloud reflects the restored local state
+        rather than letting the next regular sync overwrite it with newer cloud records.
+        """
+        if self._provider is None or not self._provider.is_authenticated():
+            logger.warning("Force push skipped - no provider or not authenticated")
+            return
+
+        if self._syncing:
+            logger.warning("Sync already in progress, skipping force push")
+            return
+
+        if not await self._check_connectivity():
+            logger.info("Force push skipped - offline")
+            return
+
+        self._syncing = True
+        self._state.status = "syncing"
+        self.sync_started.emit()
+
+        try:
+            await self._provider.create_folder(self._cloud_folder)
+            self._backup_local()
+
+            local_hashes: dict[str, str] = {
+                "rlqshell.db": SyncState.compute_file_hash(self._data_dir / "rlqshell.db")
+            }
+
+            # Push vault.key and config.json unconditionally.
+            for filename in _SYNC_FILES:
+                path = self._data_dir / filename
+                local_hashes[filename] = SyncState.compute_file_hash(path)
+                if path.exists():
+                    await self._push_file(filename)
+
+            # Upload all local record payloads directly — no download, no merge.
+            records_payload = self._sanitize_payload(self._export_local_records())
+            await self._upload_remote_records(records_payload)
+
+            identities_payload = self._sanitize_identities_payload(
+                self._export_identity_records()
+            )
+            await self._upload_identities(identities_payload)
+
+            auxiliary_payload = self._sanitize_auxiliary_payload(
+                self._export_auxiliary_records()
+            )
+            await self._upload_auxiliary(auxiliary_payload)
+
+            db_path = self._data_dir / "rlqshell.db"
+            local_hashes["rlqshell.db"] = SyncState.compute_file_hash(db_path)
+
+            meta = self._state.build_meta(
+                APP_VERSION,
+                local_hashes.get("rlqshell.db", ""),
+                local_hashes,
+            )
+            meta_json = json.dumps(asdict(meta), indent=2)
+            meta_path = self._data_dir / "sync_meta.json"
+            meta_path.write_text(meta_json, encoding="utf-8")
+            await self._provider.upload_file(
+                str(meta_path),
+                f"{self._cloud_folder}/sync_meta.json",
+            )
+
+            if self._token_save_callback and self._provider:
+                tokens = self._provider.get_tokens()
+                if tokens:
+                    self._token_save_callback(tokens[0], tokens[1])
+
+            self._state.update_after_sync(
+                local_hashes.get("rlqshell.db", ""),
+                local_hashes.get("rlqshell.db", ""),
+            )
+            logger.info("Force push completed successfully")
+            self.sync_completed.emit({"added": 0, "updated": 0, "deleted": 0, "pushed": 1})
+
+        except Exception as exc:
+            logger.exception("Force push failed")
+            self._state.status = "error"
+            self.sync_error.emit(str(exc))
+        finally:
+            self._syncing = False
+
     async def shutdown(self) -> None:
         """Close provider session and stop timers."""
         self.stop_auto_sync()

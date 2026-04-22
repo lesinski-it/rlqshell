@@ -17,6 +17,7 @@ from rlqshell.app.config import ConfigManager
 from rlqshell.app.constants import Colors
 from rlqshell.ui.settings.about_settings import AboutSettings
 from rlqshell.ui.settings.appearance_settings import AppearanceSettings
+from rlqshell.ui.settings.backup_settings import BackupSettings
 from rlqshell.ui.settings.general_settings import GeneralSettings
 from rlqshell.ui.settings.keybinding_settings import KeybindingSettings
 from rlqshell.ui.settings.sync_settings import SyncSettings
@@ -97,6 +98,7 @@ class SettingsDialog(QDialog):
             token_store=token_store, credential_store=credential_store,
         ))
         self._add_page("Updates", UpdateSettings(config, update_manager=update_manager))
+        self._add_page("Backup", BackupSettings(config, sync_engine=sync_engine))
         self._add_page("About", AboutSettings())
 
         self._sidebar.currentRowChanged.connect(self._stack.setCurrentIndex)
