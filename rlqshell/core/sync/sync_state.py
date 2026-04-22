@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 class SyncMeta:
     """Metadata stored alongside synced files in the cloud."""
 
+    epoch: int = 0
     last_modified: str = ""
     device_id: str = ""
     device_name: str = ""
@@ -36,6 +37,7 @@ class SyncState:
         self._local_hash: str = ""
         self._device_id: str = ""
         self._status: str = "idle"  # idle | syncing | error
+        self._local_epoch: int = 0
         self._load()
 
     @property
@@ -57,6 +59,14 @@ class SyncState:
     @property
     def device_id(self) -> str:
         return self._device_id
+
+    @property
+    def local_epoch(self) -> int:
+        return self._local_epoch
+
+    def advance_epoch(self, new_epoch: int) -> None:
+        self._local_epoch = new_epoch
+        self._save()
 
     def set_provider(self, name: str) -> None:
         self._provider = name
@@ -90,10 +100,12 @@ class SyncState:
         app_version: str,
         db_hash: str,
         file_hashes: dict[str, str] | None = None,
+        epoch: int = 0,
     ) -> SyncMeta:
         import platform
 
         return SyncMeta(
+            epoch=epoch,
             last_modified=datetime.now().isoformat(),
             device_id=self._device_id,
             device_name=platform.node(),
@@ -110,6 +122,7 @@ class SyncState:
                 self._remote_hash = data.get("remote_hash", "")
                 self._local_hash = data.get("local_hash", "")
                 self._device_id = data.get("device_id", str(uuid4())[:8])
+                self._local_epoch = int(data.get("local_epoch", 0))
                 last = data.get("last_sync")
                 if last:
                     self._last_sync = datetime.fromisoformat(last)
@@ -125,6 +138,7 @@ class SyncState:
             "remote_hash": self._remote_hash,
             "local_hash": self._local_hash,
             "device_id": self._device_id,
+            "local_epoch": self._local_epoch,
         }
         self._path.parent.mkdir(parents=True, exist_ok=True)
         self._path.write_text(json.dumps(data, indent=2), encoding="utf-8")

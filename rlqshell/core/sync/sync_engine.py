@@ -202,6 +202,27 @@ class SyncEngine(QObject):
                 local_hashes[filename] = SyncState.compute_file_hash(path)
 
             remote_meta = await self._get_remote_meta()
+
+            # Epoch check — if force_push was run on another device, do a full pull.
+            if remote_meta:
+                remote_epoch = remote_meta.get("epoch", 0)
+                if remote_epoch > self._state.local_epoch:
+                    logger.info(
+                        "Epoch advance detected (%d → %d) — full pull from cloud",
+                        self._state.local_epoch, remote_epoch,
+                    )
+                    await self._full_pull(remote_meta, remote_epoch)
+                    if self._token_save_callback and self._provider:
+                        tokens = self._provider.get_tokens()
+                        if tokens:
+                            self._token_save_callback(tokens[0], tokens[1])
+                    db_path = self._data_dir / "rlqshell.db"
+                    db_hash = SyncState.compute_file_hash(db_path)
+                    self._state.update_after_sync(db_hash, db_hash)
+                    logger.info("Sync completed successfully (epoch pull)")
+                    self.sync_completed.emit({"added": 0, "updated": 0, "deleted": 0, "pushed": 0})
+                    return
+
             remote_hashes: dict[str, str] = {}
             remote_modified: float | None = None
 
@@ -2004,6 +2025,27 @@ class SyncEngine(QObject):
             if tmp.exists():
                 tmp.unlink()
 
+    async def _full_pull(self, remote_meta: dict, new_epoch: int) -> None:
+        """Replace local data with cloud data unconditionally. Called on epoch advance."""
+        remote_hashes: dict[str, str] = remote_meta.get("file_hashes") or {}
+        for filename in _SYNC_FILES:
+            local_path = self._data_dir / filename
+            local_hash = SyncState.compute_file_hash(local_path)
+            if remote_hashes.get(filename, "") and remote_hashes[filename] != local_hash:
+                await self._pull_file(filename)
+
+        remote_records = self._sanitize_payload(await self._download_remote_records())
+        self._apply_merged_payload(remote_records)
+
+        remote_identities = self._sanitize_identities_payload(await self._download_identities())
+        self._apply_merged_identities_payload(remote_identities)
+
+        remote_auxiliary = self._sanitize_auxiliary_payload(await self._download_auxiliary())
+        self._apply_merged_auxiliary_payload(remote_auxiliary)
+
+        self._state.advance_epoch(new_epoch)
+        logger.info("Full pull completed (local epoch → %d)", new_epoch)
+
     async def force_push(self) -> None:
         """Upload all local data to cloud without downloading, overwriting cloud state.
 
@@ -2058,10 +2100,12 @@ class SyncEngine(QObject):
             db_path = self._data_dir / "rlqshell.db"
             local_hashes["rlqshell.db"] = SyncState.compute_file_hash(db_path)
 
+            new_epoch = self._state.local_epoch + 1
             meta = self._state.build_meta(
                 APP_VERSION,
                 local_hashes.get("rlqshell.db", ""),
                 local_hashes,
+                epoch=new_epoch,
             )
             meta_json = json.dumps(asdict(meta), indent=2)
             meta_path = self._data_dir / "sync_meta.json"
@@ -2076,11 +2120,12 @@ class SyncEngine(QObject):
                 if tokens:
                     self._token_save_callback(tokens[0], tokens[1])
 
+            self._state.advance_epoch(new_epoch)
             self._state.update_after_sync(
                 local_hashes.get("rlqshell.db", ""),
                 local_hashes.get("rlqshell.db", ""),
             )
-            logger.info("Force push completed successfully")
+            logger.info("Force push completed successfully (epoch → %d)", new_epoch)
             self.sync_completed.emit({"added": 0, "updated": 0, "deleted": 0, "pushed": 1})
 
         except Exception as exc:
