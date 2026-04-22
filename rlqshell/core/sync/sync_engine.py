@@ -211,7 +211,7 @@ class SyncEngine(QObject):
                         "Epoch advance detected (%d → %d) — full pull from cloud",
                         self._state.local_epoch, remote_epoch,
                     )
-                    await self._full_pull(remote_meta, remote_epoch)
+                    pull_stats = await self._full_pull(remote_meta, remote_epoch)
                     if self._token_save_callback and self._provider:
                         tokens = self._provider.get_tokens()
                         if tokens:
@@ -220,7 +220,7 @@ class SyncEngine(QObject):
                     db_hash = SyncState.compute_file_hash(db_path)
                     self._state.update_after_sync(db_hash, db_hash)
                     logger.info("Sync completed successfully (epoch pull)")
-                    self.sync_completed.emit({"added": 0, "updated": 0, "deleted": 0, "pushed": 0})
+                    self.sync_completed.emit(pull_stats)
                     return
 
             remote_hashes: dict[str, str] = {}
@@ -2055,8 +2055,11 @@ class SyncEngine(QObject):
             conn.execute("DELETE FROM connection_history WHERE sync_uuid IS NOT NULL")
             conn.commit()
 
-    async def _full_pull(self, remote_meta: dict, new_epoch: int) -> None:
-        """Replace local data with cloud data unconditionally. Called on epoch advance."""
+    async def _full_pull(self, remote_meta: dict, new_epoch: int) -> dict[str, int]:
+        """Replace local data with cloud data unconditionally. Called on epoch advance.
+
+        Returns aggregated stats so the UI can refresh views accordingly.
+        """
         remote_hashes: dict[str, str] = remote_meta.get("file_hashes") or {}
         for filename in _SYNC_FILES:
             local_path = self._data_dir / filename
@@ -2078,12 +2081,18 @@ class SyncEngine(QObject):
         self._clear_synced_records()
         self._clear_synced_identity_records()
 
-        self._apply_merged_payload(remote_records)
-        self._apply_merged_identities_payload(remote_identities)
-        self._apply_merged_auxiliary_payload(remote_auxiliary)
+        stats = {"added": 0, "updated": 0, "deleted": 0, "pushed": 0}
+        for partial in (
+            self._apply_merged_payload(remote_records),
+            self._apply_merged_identities_payload(remote_identities),
+            self._apply_merged_auxiliary_payload(remote_auxiliary),
+        ):
+            for key in stats:
+                stats[key] += partial.get(key, 0)
 
         self._state.advance_epoch(new_epoch)
         logger.info("Full pull completed (local epoch → %d)", new_epoch)
+        return stats
 
     async def force_push(self) -> None:
         """Upload all local data to cloud without downloading, overwriting cloud state.
