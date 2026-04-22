@@ -7,8 +7,8 @@ import getpass
 import logging
 import uuid
 
-from PySide6.QtCore import QRect, QTimer, Qt, Signal
-from PySide6.QtGui import QColor, QPainter, QPen
+from PySide6.QtCore import QPoint, QRect, QTimer, Qt, Signal
+from PySide6.QtGui import QColor, QFont, QPainter, QPen
 from PySide6.QtWidgets import QMessageBox, QStackedWidget, QVBoxLayout, QWidget
 
 from rlqshell.app.config import ConfigManager
@@ -45,96 +45,224 @@ _TAB_MIME = "application/x-rlqshell-tab"
 class _DropZoneOverlay(QWidget):
     """Transparent overlay that shows drop zone indicators when dragging a tab.
 
-    Divides the area into left/right (vertical split) and top/bottom (horizontal split)
-    quadrants. The hovered quadrant is highlighted with an accent color.
+    Finds the split panel under the cursor (or uses the whole area when no
+    splits yet) and divides that panel into left/right (vertical split) and
+    top/bottom (horizontal split) halves. The hovered half is highlighted.
     """
 
-    drop_requested = Signal(str, str)  # zone ("left"/"right"/"top"/"bottom"), tab_id
+    # zone, tab_id, panel_id ("" when no specific split panel is targeted)
+    drop_requested = Signal(str, str, str)
 
-    def __init__(self, parent: QWidget) -> None:
+    def __init__(self, parent: QWidget, target_provider) -> None:
         super().__init__(parent)
         self.setAcceptDrops(True)
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, False)
+        # WA_NoSystemBackground + manual full-area fill on every paint prevents
+        # ghost highlights from a previous zone/panel lingering between frames.
+        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_OpaquePaintEvent, False)
         self.setVisible(False)
-        self._zone: str | None = None  # hovered zone
+        # Callable returning the current SplitContainer (or None) whose panels
+        # should be targeted. None means "use the full overlay area".
+        self._target_provider = target_provider
+        self._zone: str | None = None
+        self._target_rect: QRect | None = None
+        self._target_panel_id: str = ""
+        self._target_host_label: str = ""
 
-    def _zone_at(self, pos) -> str:
-        w, h = self.width(), self.height()
-        x, y = pos.x(), pos.y()
-        # Determine zone by which edge the cursor is closest to
+    def _update_target(self, pos) -> None:
+        container = self._target_provider()
+        panel = None
+        if container is not None:
+            panel = container.panel_at_global_pos(self.mapToGlobal(pos))
+
+        if panel is not None:
+            # Map via global screen coords: the overlay is a SIBLING of the
+            # panel (both children of _terminal_stack), not an ancestor, so
+            # panel.mapTo(self, ...) is undefined and in practice walks up
+            # to the top-level window — producing a visible offset equal to
+            # the tab bar / sidebar. Going through mapToGlobal/mapFromGlobal
+            # works regardless of parent relationships.
+            global_top_left = panel.mapToGlobal(QPoint(0, 0))
+            top_left = self.mapFromGlobal(global_top_left)
+            self._target_rect = QRect(top_left, panel.size())
+            self._target_panel_id = panel.panel_id
+            self._target_host_label = panel.host_label or ""
+        else:
+            self._target_rect = self.rect()
+            self._target_panel_id = ""
+            self._target_host_label = ""
+
+        rect = self._target_rect
+        local_x = pos.x() - rect.left()
+        local_y = pos.y() - rect.top()
         margins = {
-            "left": x,
-            "right": w - x,
-            "top": y,
-            "bottom": h - y,
+            "left": local_x,
+            "right": rect.width() - local_x,
+            "top": local_y,
+            "bottom": rect.height() - local_y,
         }
-        return min(margins, key=margins.get)
+        self._zone = min(margins, key=margins.get)
 
     def dragEnterEvent(self, event) -> None:
         if event.mimeData().hasFormat(_TAB_MIME):
             event.acceptProposedAction()
-            self._zone = self._zone_at(event.position().toPoint())
+            self._update_target(event.position().toPoint())
             self.update()
 
     def dragMoveEvent(self, event) -> None:
         if event.mimeData().hasFormat(_TAB_MIME):
             event.acceptProposedAction()
-            new_zone = self._zone_at(event.position().toPoint())
-            if new_zone != self._zone:
-                self._zone = new_zone
+            prev_zone = self._zone
+            prev_panel = self._target_panel_id
+            self._update_target(event.position().toPoint())
+            if prev_zone != self._zone or prev_panel != self._target_panel_id:
                 self.update()
 
     def dragLeaveEvent(self, event) -> None:
         self._zone = None
+        self._target_rect = None
+        self._target_panel_id = ""
+        self._target_host_label = ""
         self.setVisible(False)
 
     def dropEvent(self, event) -> None:
         if not event.mimeData().hasFormat(_TAB_MIME):
             return
         event.acceptProposedAction()
-        zone = self._zone_at(event.position().toPoint())
+        self._update_target(event.position().toPoint())
+        zone = self._zone or "right"
+        panel_id = self._target_panel_id
         tab_id = bytes(event.mimeData().data(_TAB_MIME)).decode("utf-8")
         self._zone = None
+        self._target_rect = None
+        self._target_panel_id = ""
+        self._target_host_label = ""
         self.setVisible(False)
-        self.drop_requested.emit(zone, tab_id)
+        self.drop_requested.emit(zone, tab_id, panel_id)
 
     def paintEvent(self, event) -> None:
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
 
-        w, h = self.width(), self.height()
-        accent = QColor(Colors.ACCENT)
-        accent.setAlpha(40)
-        accent_strong = QColor(Colors.ACCENT)
-        accent_strong.setAlpha(100)
-        border = QColor(Colors.ACCENT)
-        border.setAlpha(180)
+        # Clean, heavily dimmed base so nothing leaks from the previous frame.
+        p.setCompositionMode(QPainter.CompositionMode.CompositionMode_Source)
+        p.fillRect(self.rect(), QColor(0, 0, 0, 150))
+        p.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
 
-        # Draw semi-transparent background
-        p.fillRect(self.rect(), QColor(0, 0, 0, 60))
+        if self._zone is None or self._target_rect is None:
+            p.end()
+            return
 
-        # Draw the hovered zone highlight
-        zone = self._zone
+        # First, outline every other panel with a faint dashed border so the
+        # user can see the WHOLE split structure — otherwise empty/unscrolled
+        # terminals look like blank space and the target highlight seems
+        # "misplaced" when it really is inside a real panel.
+        container = self._target_provider()
+        if container is not None:
+            ghost_pen = QPen(QColor(255, 255, 255, 90), 1, Qt.PenStyle.DashLine)
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.setPen(ghost_pen)
+            for other in container.panels:
+                if other.panel_id == self._target_panel_id:
+                    continue
+                tl = self.mapFromGlobal(other.mapToGlobal(QPoint(0, 0)))
+                p.drawRect(QRect(tl, other.size()).adjusted(2, 2, -2, -2))
+
+        # Inset the highlighted rect slightly so splitter handles, the
+        #    SplitPanel's own 1px QSS border, and rounding never make the
+        #    outline look like it overshoots the visible panel.
+        rect = self._target_rect.adjusted(3, 3, -3, -3)
+        w, h = rect.width(), rect.height()
         zones = {
-            "left": QRect(0, 0, w // 2, h),
-            "right": QRect(w // 2, 0, w - w // 2, h),
-            "top": QRect(0, 0, w, h // 2),
-            "bottom": QRect(0, h // 2, w, h - h // 2),
+            "left": QRect(rect.left(), rect.top(), w // 2, h),
+            "right": QRect(rect.left() + w // 2, rect.top(), w - w // 2, h),
+            "top": QRect(rect.left(), rect.top(), w, h // 2),
+            "bottom": QRect(rect.left(), rect.top() + h // 2, w, h - h // 2),
         }
+        zone_rect = zones.get(self._zone)
+        if zone_rect is None:
+            p.end()
+            return
 
-        if zone and zone in zones:
-            rect = zones[zone]
-            p.fillRect(rect, accent_strong)
-            pen = QPen(border, 2)
-            p.setPen(pen)
-            p.drawRect(rect.adjusted(1, 1, -1, -1))
+        accent = QColor(Colors.ACCENT)
 
-            # Draw label
-            labels = {"left": "\u258e Split Left", "right": "Split Right \u2590",
-                       "top": "\u2580 Split Top", "bottom": "Split Bottom \u2584"}
-            p.setPen(QColor(Colors.TEXT_PRIMARY))
-            p.setFont(p.font())
-            p.drawText(rect, Qt.AlignmentFlag.AlignCenter, labels.get(zone, ""))
+        # 1. Tint the whole target panel so the user sees WHICH panel is
+        #    selected.
+        panel_tint = QColor(accent)
+        panel_tint.setAlpha(35)
+        p.setCompositionMode(QPainter.CompositionMode.CompositionMode_Source)
+        p.fillRect(rect, panel_tint)
+        p.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
+
+        # 2. Fill the zone (slot where the new panel will appear) using
+        #    SourceOver so we blend on top of the tint instead of erasing
+        #    it — otherwise the panel border drawn next would look cut off
+        #    on the zone side.
+        zone_fill = QColor(accent)
+        zone_fill.setAlpha(170)
+        p.fillRect(zone_rect, zone_fill)
+
+        # 3. Draw the SOLID border around the full target panel LAST so it
+        #    sits on top of the zone fill.
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        border_pen = QPen(accent, 3, Qt.PenStyle.SolidLine)
+        border_pen.setJoinStyle(Qt.PenJoinStyle.MiterJoin)
+        p.setPen(border_pen)
+        p.drawRect(rect)
+
+        # 3. Pill with the target panel's host label — tells the user exactly
+        #    which existing session is being split.
+        if self._target_host_label:
+            pill_font = QFont(self.font())
+            pill_font.setPointSize(max(11, pill_font.pointSize() + 1))
+            pill_font.setBold(True)
+            p.setFont(pill_font)
+            fm = p.fontMetrics()
+            pill_text = f"  Splitting: {self._target_host_label}  "
+            pill_w = fm.horizontalAdvance(pill_text) + 16
+            pill_h = fm.height() + 10
+            pill_x = rect.left() + 12
+            pill_y = rect.top() - pill_h // 2
+            if pill_y < 2:
+                pill_y = rect.top() + 8
+            pill_rect = QRect(pill_x, pill_y, pill_w, pill_h)
+            p.setBrush(accent)
+            p.setPen(QPen(QColor("#ffffff"), 1))
+            p.drawRoundedRect(pill_rect, pill_h // 2, pill_h // 2)
+            p.setPen(QColor("#ffffff"))
+            p.drawText(pill_rect, Qt.AlignmentFlag.AlignCenter, pill_text)
+
+        # 4. Big legible label centred in the zone with a dark pill backing
+        #    so it stays readable on any terminal background.
+        labels = {
+            "left": "\u25c0  Open on the LEFT",
+            "right": "Open on the RIGHT  \u25b6",
+            "top": "\u25b2  Open on TOP",
+            "bottom": "Open on BOTTOM  \u25bc",
+        }
+        label_text = labels.get(self._zone, "")
+        if label_text:
+            label_font = QFont(self.font())
+            label_font.setPointSize(max(13, label_font.pointSize() + 3))
+            label_font.setBold(True)
+            p.setFont(label_font)
+            fm = p.fontMetrics()
+            text_w = fm.horizontalAdvance(label_text)
+            text_h = fm.height()
+            cx = zone_rect.center().x()
+            cy = zone_rect.center().y()
+            bg_rect = QRect(
+                cx - text_w // 2 - 18,
+                cy - text_h // 2 - 8,
+                text_w + 36,
+                text_h + 16,
+            )
+            p.setBrush(QColor(0, 0, 0, 190))
+            p.setPen(QPen(QColor("#ffffff"), 1))
+            p.drawRoundedRect(bg_rect, 10, 10)
+            p.setPen(QColor("#ffffff"))
+            p.drawText(bg_rect, Qt.AlignmentFlag.AlignCenter, label_text)
 
         p.end()
 
@@ -216,9 +344,13 @@ class ConnectionsPage(QWidget):
         self._split_picker: SplitPickerDialog | None = None
         self._pending_split_orientation: Qt.Orientation | None = None
         self._pending_split_insert_before: bool = False
+        self._pending_split_target_panel_id: str = ""
 
-        # Drop zone overlay for tab drag-to-split
-        self._drop_overlay = _DropZoneOverlay(self._terminal_stack)
+        # Drop zone overlay for tab drag-to-split — highlights only the panel
+        # under the cursor, so drops split that specific panel in half.
+        self._drop_overlay = _DropZoneOverlay(
+            self._terminal_stack, self._current_split_container
+        )
         self._drop_overlay.drop_requested.connect(self._on_drop_zone_split)
         self._terminal_stack.setAcceptDrops(True)
         self._terminal_stack.installEventFilter(self)
@@ -1145,6 +1277,10 @@ class ConnectionsPage(QWidget):
 
         insert_before = self._pending_split_insert_before
         self._pending_split_insert_before = False
+        target_panel_id = self._pending_split_target_panel_id
+        self._pending_split_target_panel_id = ""
+        if target_panel_id:
+            container.set_active_panel(target_panel_id)
         panel = container.split(orientation, new_terminal, new_conn, host.id, label, insert_before=insert_before)
         if panel is None:
             if wrapped_existing_terminal or froze_existing_terminals:
@@ -1424,6 +1560,14 @@ class ConnectionsPage(QWidget):
     # Drag-to-split (tab dropped onto terminal area)
     # ------------------------------------------------------------------
 
+    def _current_split_container(self) -> SplitContainer | None:
+        """Return the SplitContainer shown for the active tab, if any."""
+        active = self._tab_bar.active_tab
+        if not active or active not in self._sessions:
+            return None
+        widget, _ = self._sessions[active]
+        return widget if isinstance(widget, SplitContainer) else None
+
     def eventFilter(self, obj, event) -> bool:
         """Intercept drag events on the terminal stack to show drop zone overlay."""
         if obj is not self._terminal_stack:
@@ -1446,7 +1590,7 @@ class ConnectionsPage(QWidget):
 
         return super().eventFilter(obj, event)
 
-    def _on_drop_zone_split(self, zone: str, dropped_tab_id: str) -> None:
+    def _on_drop_zone_split(self, zone: str, dropped_tab_id: str, panel_id: str) -> None:
         """Handle a tab dropped onto a split zone in the terminal area."""
         orientation_str = "vertical" if zone in ("left", "right") else "horizontal"
         insert_before = zone in ("left", "top")
@@ -1455,6 +1599,7 @@ class ConnectionsPage(QWidget):
         host_id = self._tab_host_ids.get(dropped_tab_id)
         if host_id is not None:
             self._pending_split_insert_before = insert_before
+            self._pending_split_target_panel_id = panel_id
             self._on_split_host_picked(host_id, orientation_str)
             # Close the dropped tab — its connection now lives in the split panel
             if dropped_tab_id != self._tab_bar.active_tab:
@@ -1463,6 +1608,7 @@ class ConnectionsPage(QWidget):
 
         # Fallback to picker if host unknown
         self._pending_split_insert_before = insert_before
+        self._pending_split_target_panel_id = panel_id
         orientation = (
             Qt.Orientation.Horizontal if zone in ("left", "right")
             else Qt.Orientation.Vertical

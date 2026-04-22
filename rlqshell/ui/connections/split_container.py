@@ -271,6 +271,27 @@ class SplitContainer(QWidget):
     def focused_panel(self) -> SplitPanel | None:
         return self._focused_panel
 
+    def set_active_panel(self, panel_id: str) -> None:
+        """Move focus to a specific panel (used to target drag-to-split drops)."""
+        panel = self._find_panel(panel_id)
+        if panel is None or panel is self._focused_panel:
+            return
+        if self._focused_panel is not None:
+            self._focused_panel.set_focused(False)
+        self._focused_panel = panel
+        panel.set_focused(True)
+
+    def panel_at_global_pos(self, global_pos) -> SplitPanel | None:
+        """Return the SplitPanel whose geometry contains *global_pos*."""
+        for panel in self._panels:
+            top_left = panel.mapToGlobal(panel.rect().topLeft())
+            if (
+                top_left.x() <= global_pos.x() < top_left.x() + panel.width()
+                and top_left.y() <= global_pos.y() < top_left.y() + panel.height()
+            ):
+                return panel
+        return None
+
     def split(
         self,
         orientation: Qt.Orientation,
