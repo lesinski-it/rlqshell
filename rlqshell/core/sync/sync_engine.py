@@ -2025,6 +2025,36 @@ class SyncEngine(QObject):
             if tmp.exists():
                 tmp.unlink()
 
+    def _clear_synced_records(self) -> None:
+        """Delete all synced host/group/tag records so a full replace can follow."""
+        with self._db.connection() as conn:
+            conn.execute("DELETE FROM host_tags WHERE sync_uuid IS NOT NULL")
+            conn.execute("DELETE FROM hosts WHERE sync_uuid IS NOT NULL")
+            conn.execute("DELETE FROM tags WHERE sync_uuid IS NOT NULL")
+            conn.execute("DELETE FROM groups_ WHERE sync_uuid IS NOT NULL")
+            conn.commit()
+
+    def _clear_synced_identity_records(self) -> None:
+        """Delete all synced ssh_key/identity/snippet records so a full replace can follow."""
+        with self._db.connection() as conn:
+            conn.execute(
+                "UPDATE identities SET ssh_key_id = NULL"
+                " WHERE ssh_key_id IN (SELECT id FROM ssh_keys WHERE sync_uuid IS NOT NULL)"
+            )
+            conn.execute("DELETE FROM identities WHERE sync_uuid IS NOT NULL")
+            conn.execute("DELETE FROM ssh_keys WHERE sync_uuid IS NOT NULL")
+            conn.execute("DELETE FROM snippets WHERE sync_uuid IS NOT NULL")
+            conn.execute("DELETE FROM snippet_packages WHERE sync_uuid IS NOT NULL")
+            conn.commit()
+
+    def _clear_synced_auxiliary_records(self) -> None:
+        """Delete all synced auxiliary records so a full replace can follow."""
+        with self._db.connection() as conn:
+            conn.execute("DELETE FROM port_forward_rules WHERE sync_uuid IS NOT NULL")
+            conn.execute("DELETE FROM known_hosts WHERE sync_uuid IS NOT NULL")
+            conn.execute("DELETE FROM connection_history WHERE sync_uuid IS NOT NULL")
+            conn.commit()
+
     async def _full_pull(self, remote_meta: dict, new_epoch: int) -> None:
         """Replace local data with cloud data unconditionally. Called on epoch advance."""
         remote_hashes: dict[str, str] = remote_meta.get("file_hashes") or {}
@@ -2034,13 +2064,22 @@ class SyncEngine(QObject):
             if remote_hashes.get(filename, "") and remote_hashes[filename] != local_hash:
                 await self._pull_file(filename)
 
+        # Download all remote payloads first — if any download fails, local data is untouched.
         remote_records = self._sanitize_payload(await self._download_remote_records())
-        self._apply_merged_payload(remote_records)
-
         remote_identities = self._sanitize_identities_payload(await self._download_identities())
-        self._apply_merged_identities_payload(remote_identities)
-
         remote_auxiliary = self._sanitize_auxiliary_payload(await self._download_auxiliary())
+
+        # Full replace: wipe local synced records, then insert remote state.
+        # Order matters for FK constraints (auxiliary refs hosts, hosts ref groups).
+        with self._db.connection() as conn:
+            conn.execute("DELETE FROM sync_tombstones")
+            conn.commit()
+        self._clear_synced_auxiliary_records()
+        self._clear_synced_records()
+        self._clear_synced_identity_records()
+
+        self._apply_merged_payload(remote_records)
+        self._apply_merged_identities_payload(remote_identities)
         self._apply_merged_auxiliary_payload(remote_auxiliary)
 
         self._state.advance_epoch(new_epoch)

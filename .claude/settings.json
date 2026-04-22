@@ -48,7 +48,16 @@
       "Read(//d/Projekty programistyczne/RLQBackup/.gitea/workflows/**)",
       "Read(//d/Projekty programistyczne/RLQBackup/dist/**)",
       "Bash(python -c \"import ast; ast.parse\\(open\\('scripts/ftp_upload.py', encoding='utf-8'\\).read\\(\\)\\); print\\('ftp_upload.py: syntax OK'\\)\")",
-      "Bash(powershell -NoProfile -Command ':*)"
+      "Bash(powershell -NoProfile -Command ':*)",
+      "Read(//c/Users/ravczy/AppData/Local/rlqshell/**)",
+      "Read(//c/Users/ravczy/AppData/Roaming/**)",
+      "Bash(echo \"PID: $!\")",
+      "Bash(git log *)",
+      "Bash(git ls-remote *)",
+      "Bash(git stash *)",
+      "Bash(ls .gitea/workflows/)",
+      "Bash(ls .github/workflows/)",
+      "Bash(.venv313/Scripts/python.exe -c \"from rlqshell.core.sync.sync_state import SyncState, SyncMeta; from rlqshell.core.sync.sync_engine import SyncEngine; print\\('OK'\\)\")"
     ]
   }
 }
