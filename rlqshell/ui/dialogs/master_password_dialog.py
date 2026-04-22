@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import sys
+
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
+    QApplication,
     QDialog,
     QHBoxLayout,
     QLabel,
@@ -35,10 +38,20 @@ class MasterPasswordDialog(QDialog):
             Qt.WindowType.Dialog
             | Qt.WindowType.WindowTitleHint
             | Qt.WindowType.CustomizeWindowHint
+            | Qt.WindowType.WindowStaysOnTopHint
         )
 
         self._build_ui()
         self._apply_style()
+
+    def showEvent(self, event) -> None:  # noqa: N802 — Qt override
+        super().showEvent(event)
+        self.raise_()
+        self.activateWindow()
+        app = QApplication.instance()
+        if app is not None:
+            # 0 = flash taskbar entry until the window gains focus
+            app.alert(self, 0)
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
@@ -98,6 +111,11 @@ class MasterPasswordDialog(QDialog):
         # Buttons
         btn_row = QHBoxLayout()
         btn_row.addStretch()
+
+        self._exit_btn = QPushButton("Exit")
+        self._exit_btn.setObjectName("exitBtn")
+        self._exit_btn.clicked.connect(self._on_exit)
+        btn_row.addWidget(self._exit_btn)
 
         self._skip_btn = QPushButton("Skip")
         self._skip_btn.setObjectName("skipBtn")
@@ -168,6 +186,19 @@ class MasterPasswordDialog(QDialog):
             QPushButton#skipBtn:hover {{
                 background-color: {Colors.BG_HOVER};
             }}
+            QPushButton#exitBtn {{
+                background-color: transparent;
+                color: {Colors.DANGER};
+                border: 1px solid {Colors.BORDER};
+                border-radius: 6px;
+                padding: 8px 16px;
+                font-size: 13px;
+            }}
+            QPushButton#exitBtn:hover {{
+                background-color: {Colors.DANGER};
+                color: #ffffff;
+                border-color: {Colors.DANGER};
+            }}
             QPushButton#forgotBtn {{
                 background-color: transparent;
                 color: {Colors.TEXT_MUTED};
@@ -230,6 +261,12 @@ class MasterPasswordDialog(QDialog):
         dlg = RecoverVaultDialog(self._store, self)
         if dlg.exec() == QDialog.DialogCode.Accepted:
             self.accept()
+
+    def _on_exit(self) -> None:
+        app = QApplication.instance()
+        if app is not None:
+            app.quit()
+        sys.exit(0)
 
     def _on_skip(self) -> None:
         if self._is_new:
