@@ -1,3 +1,3 @@
 """RLQShell — Modern cross-platform SSH client."""
 
-__version__ = "2.9.43"
+__version__ = "2.9.45"
