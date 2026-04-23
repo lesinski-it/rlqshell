@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QCursor
+from PySide6.QtGui import QCursor, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -49,7 +49,7 @@ class DetachedTabWindow(QMainWindow):
         main_layout.setSpacing(0)
 
         # Custom title bar
-        title_bar = QWidget()
+        self._title_bar = title_bar = QWidget()
         title_bar.setFixedHeight(36)
         title_bar.setStyleSheet(f"background-color: {Colors.BG_DARKER};")
 
@@ -115,6 +115,10 @@ class DetachedTabWindow(QMainWindow):
         # Position at cursor
         self.move(QCursor.pos())
 
+        # F11 fullscreen scoped to this window only
+        self._fs_shortcut = QShortcut(QKeySequence("F11"), self)
+        self._fs_shortcut.activated.connect(self.toggle_fullscreen)
+
     @property
     def tab_id(self) -> str:
         return self._tab_id
@@ -146,12 +150,23 @@ class DetachedTabWindow(QMainWindow):
                 return widget
         return None
 
+    def toggle_fullscreen(self) -> None:
+        if self.isFullScreen():
+            self.showNormal()
+            self._title_bar.setVisible(True)
+        else:
+            self._title_bar.setVisible(False)
+            self.showFullScreen()
+
     def close_for_dock(self) -> None:
         """Close without emitting the closed signal (used when docking back)."""
         self._closing_from_dock = True
         self.close()
 
     def closeEvent(self, event) -> None:
+        if self.isFullScreen():
+            self.showNormal()
+            self._title_bar.setVisible(True)
         if not self._closing_from_dock:
             self.closed.emit(self._tab_id)
         event.accept()

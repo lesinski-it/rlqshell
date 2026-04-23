@@ -1016,6 +1016,14 @@ class ConnectionsPage(QWidget):
         self._detached_windows[tab_id] = win
         win.show()
 
+        # Reroute RDP/VNC panel's fullscreen button to this detached window
+        if isinstance(widget, RemoteDesktopContainer):
+            try:
+                widget.fullscreen_requested.disconnect(self._tab_bar.fullscreen_requested)
+            except (RuntimeError, TypeError):
+                pass
+            widget.fullscreen_requested.connect(win.toggle_fullscreen)
+
         # Unfreeze and recalculate after layout settles
         QTimer.singleShot(200, lambda w=widget, c=conn: self._refresh_detached(w, c))
 
@@ -1058,11 +1066,23 @@ class ConnectionsPage(QWidget):
             win.close_for_dock()
             return
 
+        # Exit fullscreen on the detached window before reparenting
+        if win.isFullScreen():
+            win.showNormal()
+
         # Retrieve the content widget from the floating window
         widget = win.dock_back()
         if widget is None:
             win.close_for_dock()
             return
+
+        # Reroute RDP/VNC panel's fullscreen button back to main window flow
+        if isinstance(widget, RemoteDesktopContainer):
+            try:
+                widget.fullscreen_requested.disconnect(win.toggle_fullscreen)
+            except (RuntimeError, TypeError):
+                pass
+            widget.fullscreen_requested.connect(self._tab_bar.fullscreen_requested)
 
         # Freeze resize during reparenting
         self._freeze_all_terminals(widget, True)
