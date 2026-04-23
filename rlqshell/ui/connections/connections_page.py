@@ -330,6 +330,8 @@ class ConnectionsPage(QWidget):
         # Track tab_id → (widget, connection)
         self._sessions: dict[str, tuple[QWidget, AbstractConnection | None]] = {}
         self._detached_windows: dict[str, DetachedTabWindow] = {}
+        # Per-detached-window status bars (SSH tabs only)
+        self._detached_status_bars: dict[str, SessionStatusBar] = {}
         self._history_records: dict[str, int] = {}  # tab_id → history record id
         self._tab_host_ids: dict[str, int] = {}  # tab_id → host_id (for split-clone)
         self._split_sub_conns: dict[str, list[tuple[str, AbstractConnection]]] = {}  # tab_id → [(sub_id, conn)]
@@ -930,6 +932,11 @@ class ConnectionsPage(QWidget):
         monitor = ServerMonitor(conn.transport, hostname)
         self._monitors[tab_id] = monitor
         monitor.start()
+        # If this tab is currently detached, wire its floating status bar
+        detached_bar = self._detached_status_bars.get(tab_id)
+        if detached_bar is not None:
+            monitor.stats_updated.connect(detached_bar.update_stats)
+            return
         # Refresh status bar if this tab is currently active
         session = self._sessions.get(tab_id)
         if session and self._terminal_stack.currentWidget() is session[0]:
@@ -960,13 +967,31 @@ class ConnectionsPage(QWidget):
         if self._config:
             self._config.set("monitoring.enabled", enabled)
             self._config.save()
+        # Keep every open status bar's toggle visual in sync with the new state
+        sender = self.sender()
+        if sender is not self._status_bar:
+            self._status_bar.set_monitoring_enabled(enabled)
+        for bar in self._detached_status_bars.values():
+            if bar is not sender:
+                bar.set_monitoring_enabled(enabled)
         if not enabled:
             # Disconnect active monitor first
             if self._active_monitor_id is not None:
                 prev = self._monitors.get(self._active_monitor_id)
                 if prev is not None:
-                    prev.stats_updated.disconnect(self._status_bar.update_stats)
+                    try:
+                        prev.stats_updated.disconnect(self._status_bar.update_stats)
+                    except (RuntimeError, TypeError):
+                        pass
                 self._active_monitor_id = None
+            # Disconnect any detached bars still wired to their monitors
+            for tab_id, bar in self._detached_status_bars.items():
+                monitor = self._monitors.get(tab_id)
+                if monitor is not None:
+                    try:
+                        monitor.stats_updated.disconnect(bar.update_stats)
+                    except (RuntimeError, TypeError):
+                        pass
             for monitor in list(self._monitors.values()):
                 monitor.stop()
             self._monitors.clear()
@@ -982,6 +1007,10 @@ class ConnectionsPage(QWidget):
                     monitor = ServerMonitor(conn.transport, conn.hostname)
                     self._monitors[tab_id] = monitor
                     monitor.start()
+                    # Re-wire detached bar if this session is currently detached
+                    detached_bar = self._detached_status_bars.get(tab_id)
+                    if detached_bar is not None:
+                        monitor.stats_updated.connect(detached_bar.update_stats)
             active = self._tab_bar.active_tab
             if active:
                 self._update_status_bar(active)
@@ -1009,12 +1038,48 @@ class ConnectionsPage(QWidget):
         widget.setParent(None)  # fully detach from old parent
         self._tab_bar.remove_tab(tab_id)
 
+        # For SSH tabs, move the server status bar into the floating window.
+        # Unwire main bar from this tab's monitor first so signals don't fan
+        # out to a soon-to-be-hidden widget.
+        detached_bar: SessionStatusBar | None = None
+        is_ssh = conn is not None and conn.protocol == "ssh"
+        if is_ssh:
+            if self._active_monitor_id == tab_id:
+                prev = self._monitors.get(tab_id)
+                if prev is not None:
+                    try:
+                        prev.stats_updated.disconnect(self._status_bar.update_stats)
+                    except (RuntimeError, TypeError):
+                        pass
+                self._active_monitor_id = None
+
+            monitoring_enabled = (
+                self._config.get("monitoring.enabled", True) if self._config else True
+            )
+            detached_bar = SessionStatusBar()
+            detached_bar.set_monitoring_enabled(monitoring_enabled)
+            detached_bar.monitoring_toggled.connect(self._on_monitoring_toggled)
+            monitor = self._monitors.get(tab_id)
+            if monitor is not None and monitoring_enabled:
+                monitor.stats_updated.connect(detached_bar.update_stats)
+            self._detached_status_bars[tab_id] = detached_bar
+
         # Create floating window
-        win = DetachedTabWindow(tab_id, label, protocol, color, widget)
+        win = DetachedTabWindow(
+            tab_id, label, protocol, color, widget, status_bar=detached_bar,
+        )
         win.dock_requested.connect(self._on_tab_dock)
         win.closed.connect(self._on_detached_close)
         self._detached_windows[tab_id] = win
         win.show()
+
+        # Refresh the main-window status bar for whatever tab is active now
+        active = self._tab_bar.active_tab
+        if active:
+            self._update_status_bar(active)
+        else:
+            self._status_bar.clear()
+            self._status_bar.setVisible(False)
 
         # Reroute RDP/VNC panel's fullscreen button to this detached window
         if isinstance(widget, RemoteDesktopContainer):
@@ -1070,6 +1135,21 @@ class ConnectionsPage(QWidget):
         if win.isFullScreen():
             win.showNormal()
 
+        # Unwire the floating status bar from the monitor — the main-window
+        # bar will take over when the tab becomes active again.
+        detached_bar = self._detached_status_bars.pop(tab_id, None)
+        if detached_bar is not None:
+            monitor = self._monitors.get(tab_id)
+            if monitor is not None:
+                try:
+                    monitor.stats_updated.disconnect(detached_bar.update_stats)
+                except (RuntimeError, TypeError):
+                    pass
+            try:
+                detached_bar.monitoring_toggled.disconnect(self._on_monitoring_toggled)
+            except (RuntimeError, TypeError):
+                pass
+
         # Retrieve the content widget from the floating window
         widget = win.dock_back()
         if widget is None:
@@ -1105,6 +1185,14 @@ class ConnectionsPage(QWidget):
     def _on_detached_close(self, tab_id: str) -> None:
         """Handle closing of a detached window — full session cleanup."""
         self._detached_windows.pop(tab_id, None)
+        detached_bar = self._detached_status_bars.pop(tab_id, None)
+        if detached_bar is not None:
+            monitor = self._monitors.get(tab_id)
+            if monitor is not None:
+                try:
+                    monitor.stats_updated.disconnect(detached_bar.update_stats)
+                except (RuntimeError, TypeError):
+                    pass
         # Close sub-connections from split panels
         for sub_id, sub_conn in self._split_sub_conns.pop(tab_id, []):
             sub_conn.close()

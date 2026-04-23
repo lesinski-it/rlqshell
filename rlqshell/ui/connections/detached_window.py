@@ -30,6 +30,7 @@ class DetachedTabWindow(QMainWindow):
         color: str | None,
         content_widget: QWidget,
         parent: QWidget | None = None,
+        status_bar: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self._tab_id = tab_id
@@ -37,6 +38,7 @@ class DetachedTabWindow(QMainWindow):
         self._protocol = protocol
         self._color = color
         self._closing_from_dock = False
+        self._status_bar = status_bar
 
         self.setWindowTitle(f"{APP_NAME} — {protocol.upper()} {label}")
         self.setMinimumSize(640, 480)
@@ -85,6 +87,19 @@ class DetachedTabWindow(QMainWindow):
         )
         tb_layout.addWidget(name_label, 1)
 
+        # Fullscreen toggle button
+        fs_btn = QPushButton("⛶")
+        fs_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        fs_btn.setToolTip("Toggle fullscreen (F11)")
+        fs_btn.setStyleSheet(
+            f"QPushButton {{ font-size: 14px; font-weight: 600; "
+            f"color: {Colors.TEXT_PRIMARY}; background-color: {Colors.BG_HOVER}; "
+            f"border: none; border-radius: 4px; padding: 1px 8px; }}"
+            f"QPushButton:hover {{ background-color: {Colors.BORDER}; }}"
+        )
+        fs_btn.clicked.connect(self.toggle_fullscreen)
+        tb_layout.addWidget(fs_btn)
+
         # Dock-back button
         dock_btn = QPushButton("Dock")
         dock_btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -108,6 +123,13 @@ class DetachedTabWindow(QMainWindow):
         container_layout.addWidget(content_widget)
         content_widget.setVisible(True)  # ensure visible after setParent(None)
         main_layout.addWidget(self._content_container, 1)
+
+        # Optional status bar at the bottom (e.g. SSH server stats).
+        # addWidget reparents the widget to the layout's owner (central), so
+        # an explicit setParent() call here would be redundant and racy.
+        if status_bar is not None:
+            main_layout.addWidget(status_bar)
+            status_bar.setVisible(True)
 
         self.setCentralWidget(central)
         self.setStyleSheet(f"QMainWindow {{ background-color: {Colors.BG_PRIMARY}; }}")
@@ -150,12 +172,20 @@ class DetachedTabWindow(QMainWindow):
                 return widget
         return None
 
+    def status_bar(self) -> QWidget | None:
+        """Return the embedded status bar (if any)."""
+        return self._status_bar
+
     def toggle_fullscreen(self) -> None:
         if self.isFullScreen():
             self.showNormal()
             self._title_bar.setVisible(True)
+            if self._status_bar is not None:
+                self._status_bar.setVisible(True)
         else:
             self._title_bar.setVisible(False)
+            if self._status_bar is not None:
+                self._status_bar.setVisible(False)
             self.showFullScreen()
 
     def close_for_dock(self) -> None:
@@ -167,6 +197,8 @@ class DetachedTabWindow(QMainWindow):
         if self.isFullScreen():
             self.showNormal()
             self._title_bar.setVisible(True)
+            if self._status_bar is not None:
+                self._status_bar.setVisible(True)
         if not self._closing_from_dock:
             self.closed.emit(self._tab_id)
         event.accept()
