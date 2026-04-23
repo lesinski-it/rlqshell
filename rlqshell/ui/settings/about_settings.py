@@ -158,6 +158,17 @@ class AboutSettings(QWidget):
 
         layout.addStretch()
 
+        # --- Built with: subtle credits for core libraries ---
+        built_with_label = QLabel(
+            "Built with PySide6 · paramiko · pyte · cryptography · "
+            "qasync · keyring · aiohttp"
+        )
+        built_with_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        built_with_label.setStyleSheet(
+            f"font-size: 11px; color: {Colors.TEXT_MUTED}; background: transparent;"
+        )
+        layout.addWidget(built_with_label)
+
         # --- Footer: privacy + licenses links ---
         footer_row = QHBoxLayout()
         footer_row.setSpacing(8)
