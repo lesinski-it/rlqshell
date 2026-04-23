@@ -6,8 +6,10 @@ import logging
 import uuid
 from functools import partial
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QMimeData, Qt, Signal
+from PySide6.QtGui import QDrag
 from PySide6.QtWidgets import (
+    QApplication,
     QHBoxLayout,
     QLabel,
     QPushButton,
@@ -23,6 +25,7 @@ from rlqshell.ui.connections.terminal_widget import TerminalWidget
 logger = logging.getLogger(__name__)
 
 _MAX_PANELS = 4
+_PANEL_SWAP_MIME = "application/x-rlqshell-panel-swap"
 
 
 # ---------------------------------------------------------------------------
@@ -53,14 +56,23 @@ class _BroadcastBar(QWidget):
 # ---------------------------------------------------------------------------
 
 class _PanelHeader(QWidget):
-    """Thin header bar for a split panel showing host label and close button."""
+    """Thin header bar for a split panel showing host label and close button.
+
+    Acts as a drag source (drag the header to swap panels) and a drop target
+    (drop another panel's header here to swap places with this panel).
+    """
 
     close_requested = Signal(str)  # panel_id
+    swap_requested = Signal(str, str)  # source_panel_id, target_panel_id
 
     def __init__(self, panel_id: str, host_label: str, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._panel_id = panel_id
         self.setFixedHeight(22)
+        self.setAcceptDrops(True)
+        self.setCursor(Qt.CursorShape.OpenHandCursor)
+        self._drag_start_pos: object | None = None
+        self._drop_highlight = False
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(6, 0, 4, 0)
@@ -107,7 +119,15 @@ class _PanelHeader(QWidget):
         layout.addWidget(self._close_btn)
 
     def set_focused(self, focused: bool) -> None:
-        if focused:
+        self._focused = focused
+        self._apply_style()
+
+    def _apply_style(self) -> None:
+        if self._drop_highlight:
+            bg = Colors.SUCCESS
+            text_color = "#ffffff"
+            border_color = Colors.SUCCESS
+        elif getattr(self, "_focused", False):
             bg = Colors.ACCENT
             text_color = "#ffffff"
             border_color = Colors.ACCENT
@@ -125,6 +145,71 @@ class _PanelHeader(QWidget):
     def set_broadcast_indicator(self, visible: bool) -> None:
         self._broadcast_icon.setVisible(visible)
 
+    # -- Drag source (header grab → move panel) ------------------------------
+
+    def mousePressEvent(self, event) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._drag_start_pos = event.position().toPoint()
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event) -> None:
+        if not (event.buttons() & Qt.MouseButton.LeftButton):
+            return
+        if self._drag_start_pos is None:
+            return
+        delta = event.position().toPoint() - self._drag_start_pos
+        if delta.manhattanLength() < QApplication.startDragDistance():
+            return
+
+        self._drag_start_pos = None
+        drag = QDrag(self)
+        mime = QMimeData()
+        mime.setData(_PANEL_SWAP_MIME, self._panel_id.encode("utf-8"))
+        drag.setMimeData(mime)
+        # Snapshot of the header as drag pixmap so the user sees what is moving.
+        pixmap = self.grab()
+        drag.setPixmap(pixmap)
+        drag.setHotSpot(event.position().toPoint())
+        drag.exec(Qt.DropAction.MoveAction)
+
+    def mouseReleaseEvent(self, event) -> None:
+        self._drag_start_pos = None
+        super().mouseReleaseEvent(event)
+
+    # -- Drop target (receive another panel's header) ------------------------
+
+    def _is_swap_drag(self, event) -> bool:
+        if not event.mimeData().hasFormat(_PANEL_SWAP_MIME):
+            return False
+        source_id = bytes(event.mimeData().data(_PANEL_SWAP_MIME)).decode("utf-8")
+        return source_id != self._panel_id
+
+    def dragEnterEvent(self, event) -> None:
+        if self._is_swap_drag(event):
+            event.acceptProposedAction()
+            self._drop_highlight = True
+            self._apply_style()
+
+    def dragMoveEvent(self, event) -> None:
+        if self._is_swap_drag(event):
+            event.acceptProposedAction()
+
+    def dragLeaveEvent(self, event) -> None:
+        if self._drop_highlight:
+            self._drop_highlight = False
+            self._apply_style()
+        super().dragLeaveEvent(event)
+
+    def dropEvent(self, event) -> None:
+        if not event.mimeData().hasFormat(_PANEL_SWAP_MIME):
+            return
+        source_id = bytes(event.mimeData().data(_PANEL_SWAP_MIME)).decode("utf-8")
+        self._drop_highlight = False
+        self._apply_style()
+        if source_id != self._panel_id:
+            event.acceptProposedAction()
+            self.swap_requested.emit(source_id, self._panel_id)
+
 
 # ---------------------------------------------------------------------------
 # SplitPanel — one terminal panel inside the split view
@@ -135,6 +220,7 @@ class SplitPanel(QWidget):
 
     close_requested = Signal(str)  # panel_id
     focus_gained = Signal(str)  # panel_id
+    swap_requested = Signal(str, str)  # source_panel_id, target_panel_id
 
     def __init__(
         self,
@@ -158,6 +244,7 @@ class SplitPanel(QWidget):
 
         self._header = _PanelHeader(panel_id, host_label)
         self._header.close_requested.connect(self.close_requested)
+        self._header.swap_requested.connect(self.swap_requested)
         layout.addWidget(self._header)
 
         layout.addWidget(terminal, 1)
@@ -455,8 +542,45 @@ class SplitContainer(QWidget):
         panel = SplitPanel(panel_id, terminal, connection, host_id, host_label)
         panel.close_requested.connect(self.remove_panel)
         panel.focus_gained.connect(self._on_panel_focus)
+        panel.swap_requested.connect(self.swap_panels)
         self._panels.append(panel)
         return panel
+
+    def swap_panels(self, source_id: str, target_id: str) -> None:
+        """Swap two panels in the splitter tree, preserving splitter sizes."""
+        if source_id == target_id:
+            return
+        src = self._find_panel(source_id)
+        tgt = self._find_panel(target_id)
+        if src is None or tgt is None:
+            return
+
+        src_parent = src.parent()
+        tgt_parent = tgt.parent()
+        if not isinstance(src_parent, QSplitter) or not isinstance(tgt_parent, QSplitter):
+            return
+
+        src_idx = src_parent.indexOf(src)
+        tgt_idx = tgt_parent.indexOf(tgt)
+        src_sizes = src_parent.sizes()
+        tgt_sizes = tgt_parent.sizes()
+
+        if src_parent is tgt_parent:
+            # Detach both so indices stay stable, then re-insert swapped.
+            src.setParent(None)
+            tgt.setParent(None)
+            lo_idx, lo_widget = min((src_idx, src), (tgt_idx, tgt), key=lambda x: x[0])
+            hi_idx, hi_widget = max((src_idx, src), (tgt_idx, tgt), key=lambda x: x[0])
+            # At lo_idx insert the one that was at hi_idx (the "other" side of the swap).
+            src_parent.insertWidget(lo_idx, tgt if lo_widget is src else src)
+            src_parent.insertWidget(hi_idx, src if lo_widget is src else tgt)
+            src_parent.setSizes(src_sizes)
+        else:
+            # Reparent across splitters. insertWidget handles reparenting.
+            tgt_parent.insertWidget(tgt_idx, src)
+            src_parent.insertWidget(src_idx, tgt)
+            src_parent.setSizes(src_sizes)
+            tgt_parent.setSizes(tgt_sizes)
 
     def _find_panel(self, panel_id: str) -> SplitPanel | None:
         for p in self._panels:
