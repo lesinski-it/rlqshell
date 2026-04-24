@@ -20,6 +20,7 @@ class VNCConnection(AbstractConnection):
     """RFB 3.8 protocol client for VNC connections."""
 
     frame_updated = Signal(QImage)
+    clipboard_text_received = Signal(str)
 
     def __init__(
         self,
@@ -27,12 +28,14 @@ class VNCConnection(AbstractConnection):
         port: int = 5900,
         password: str | None = None,
         view_only: bool = False,
+        clipboard: bool = True,
     ) -> None:
         super().__init__()
         self._hostname = hostname
         self._port = port
         self._password = password
         self._view_only = view_only
+        self._clipboard = clipboard
 
         self._sock: socket.socket | None = None
         self._connected = False
@@ -301,7 +304,10 @@ class VNCConnection(AbstractConnection):
     def _handle_cut_text(self) -> None:
         header = self._recv_exact(7)
         length = struct.unpack("!xxxI", header)[0]
-        self._recv_exact(length)  # discard
+        payload = self._recv_exact(length)
+        if self._clipboard:
+            text = payload.decode("latin-1", errors="replace")
+            self.clipboard_text_received.emit(text)
 
     def _emit_frame(self) -> None:
         if not self._fb_data:
@@ -335,6 +341,16 @@ class VNCConnection(AbstractConnection):
         y = max(0, min(y, self._height - 1))
         try:
             self._sock.sendall(struct.pack("!BBHH", 5, button_mask, x, y))
+        except OSError:
+            pass
+
+    def send_client_cut_text(self, text: str) -> None:
+        """Send RFB ClientCutText (msg type 6) — client's clipboard → server."""
+        if not self._connected or self._view_only or not self._clipboard or not self._sock:
+            return
+        payload = text.encode("latin-1", errors="replace")
+        try:
+            self._sock.sendall(struct.pack("!BxxxI", 6, len(payload)) + payload)
         except OSError:
             pass
 

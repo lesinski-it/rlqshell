@@ -78,6 +78,7 @@ CREATE TABLE IF NOT EXISTS hosts (
     vnc_quality TEXT DEFAULT 'auto'
         CHECK(vnc_quality IN ('auto','lan','broadband','low')),
     vnc_view_only BOOLEAN DEFAULT 0,
+    vnc_clipboard BOOLEAN DEFAULT 1,
     telnet_port INTEGER DEFAULT 23,
     telnet_raw_mode BOOLEAN DEFAULT 0,
     serial_port_path TEXT,
@@ -395,6 +396,7 @@ class Database:
         _add_column_if_missing("tags", "created_at", "created_at TIMESTAMP")
         _add_column_if_missing("tags", "updated_at", "updated_at TIMESTAMP")
         _add_column_if_missing("hosts", "sync_uuid", "sync_uuid TEXT")
+        _add_column_if_missing("hosts", "vnc_clipboard", "vnc_clipboard BOOLEAN DEFAULT 1")
         _add_column_if_missing("host_tags", "sync_uuid", "sync_uuid TEXT")
         _add_column_if_missing("host_tags", "created_at", "created_at TIMESTAMP")
         _add_column_if_missing("host_tags", "updated_at", "updated_at TIMESTAMP")

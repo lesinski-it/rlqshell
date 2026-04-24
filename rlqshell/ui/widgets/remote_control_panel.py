@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
 )
 
 from rlqshell.app.constants import Colors
+from rlqshell.protocols.clipboard_bridge import ClipboardBridge
 
 logger = logging.getLogger(__name__)
 
@@ -224,6 +225,7 @@ class RemoteDesktopContainer(QWidget):
         conn,
         protocol: str,
         parent: QWidget | None = None,
+        enable_clipboard: bool = True,
     ) -> None:
         super().__init__(parent)
         self._display = display_widget
@@ -232,6 +234,9 @@ class RemoteDesktopContainer(QWidget):
         self._panel.set_connection(conn, protocol)
         self._panel.fullscreen_requested.connect(self.fullscreen_requested)
         self._panel_visible = True
+        self._bridge: ClipboardBridge | None = (
+            ClipboardBridge(conn, protocol, self) if enable_clipboard else None
+        )
         # Forward the display's reconnect_requested signal up to ConnectionsPage
         if hasattr(display_widget, "reconnect_requested"):
             display_widget.reconnect_requested.connect(self.reconnect_requested)
@@ -338,11 +343,22 @@ class RemoteDesktopContainer(QWidget):
     def display_widget(self) -> QWidget:
         return self._display
 
-    def set_connection(self, conn, protocol: str) -> None:
+    def set_connection(self, conn, protocol: str, enable_clipboard: bool = True) -> None:
         """Re-wire the panel and underlying display widget to a new connection."""
         self._panel.set_connection(conn, protocol)
         if hasattr(self._display, "set_connection"):
             self._display.set_connection(conn)
+        if self._bridge is not None:
+            self._bridge.detach()
+            self._bridge = None
+        if enable_clipboard:
+            self._bridge = ClipboardBridge(conn, protocol, self)
+
+    def closeEvent(self, event) -> None:
+        if self._bridge is not None:
+            self._bridge.detach()
+            self._bridge = None
+        super().closeEvent(event)
 
     def setFocus(self) -> None:
         self._display.setFocus()

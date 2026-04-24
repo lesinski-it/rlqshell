@@ -35,6 +35,7 @@ _BOOL_FIELDS = {
     "rdp_audio",
     "rdp_clipboard",
     "vnc_view_only",
+    "vnc_clipboard",
     "telnet_raw_mode",
 }
 
@@ -61,6 +62,7 @@ _HOST_FIELDS = [
     "vnc_port",
     "vnc_quality",
     "vnc_view_only",
+    "vnc_clipboard",
     "telnet_port",
     "telnet_raw_mode",
     "serial_port_path",

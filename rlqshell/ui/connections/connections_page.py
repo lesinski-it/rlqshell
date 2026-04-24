@@ -458,10 +458,13 @@ class ConnectionsPage(QWidget):
             port=host.vnc_port,
             password=password,
             view_only=host.vnc_view_only,
+            clipboard=host.vnc_clipboard,
         )
 
         vnc_widget = VNCWidget(conn)
-        container = RemoteDesktopContainer(vnc_widget, conn, "vnc")
+        container = RemoteDesktopContainer(
+            vnc_widget, conn, "vnc", enable_clipboard=host.vnc_clipboard,
+        )
         self._terminal_stack.addWidget(container)
         container.fullscreen_requested.connect(self._tab_bar.fullscreen_requested)
 
@@ -523,7 +526,9 @@ class ConnectionsPage(QWidget):
         )
 
         rdp_widget = RDPWidget(conn)
-        container = RemoteDesktopContainer(rdp_widget, conn, "rdp")
+        container = RemoteDesktopContainer(
+            rdp_widget, conn, "rdp", enable_clipboard=host.rdp_clipboard,
+        )
         self._terminal_stack.addWidget(container)
         container.fullscreen_requested.connect(self._tab_bar.fullscreen_requested)
 
@@ -860,9 +865,10 @@ class ConnectionsPage(QWidget):
             port=host.vnc_port,
             password=password,
             view_only=host.vnc_view_only,
+            clipboard=host.vnc_clipboard,
         )
 
-        container.set_connection(conn, "vnc")
+        container.set_connection(conn, "vnc", enable_clipboard=host.vnc_clipboard)
         conn.connected.connect(container.clear_overlay)
         conn.disconnected.connect(lambda tid=tab_id: self._on_disconnected(tid))
         conn.error.connect(lambda msg, tid=tab_id: self._on_error(tid, msg))
@@ -909,7 +915,7 @@ class ConnectionsPage(QWidget):
             clipboard=host.rdp_clipboard,
         )
 
-        container.set_connection(conn, "rdp")
+        container.set_connection(conn, "rdp", enable_clipboard=host.rdp_clipboard)
         conn.connected.connect(container.clear_overlay)
         conn.disconnected.connect(lambda tid=tab_id: self._on_disconnected(tid))
         conn.error.connect(lambda msg, tid=tab_id: self._on_error(tid, msg))

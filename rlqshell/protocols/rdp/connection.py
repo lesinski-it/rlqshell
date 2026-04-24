@@ -6,7 +6,7 @@ import asyncio
 import logging
 import threading
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import QBuffer, QByteArray, QIODevice, Signal
 from PySide6.QtGui import QImage, QPainter
 
 from rlqshell.protocols.base import AbstractConnection
@@ -15,6 +15,67 @@ logger = logging.getLogger(__name__)
 
 # Target frame interval (~30 FPS cap)
 _MIN_FRAME_INTERVAL = 1.0 / 30
+
+# Monkey-patch aardwolf's CLIPRDR response parser once so that CF_DIB/CF_DIBV5
+# payloads survive as raw bytes instead of being silently dropped. Aardwolf's
+# stock from_buffer only decodes text formats and leaves dataobj=None for
+# everything else — that makes bidirectional image clipboard impossible without
+# this shim. Applied lazily on first import from this module.
+_aardwolf_patched = False
+
+
+def _patch_aardwolf_image_clipboard() -> None:
+    global _aardwolf_patched
+    if _aardwolf_patched:
+        return
+    from aardwolf.extensions.RDPECLIP.protocol.formatdataresponse import (
+        CLIPRDR_FORMAT_DATA_RESPONSE,
+    )
+    from aardwolf.extensions.RDPECLIP.protocol.formatlist import CLIPBRD_FORMAT
+
+    _orig_from_buffer = CLIPRDR_FORMAT_DATA_RESPONSE.from_buffer
+
+    @staticmethod
+    def _patched_from_buffer(buff, otype):
+        if otype in (CLIPBRD_FORMAT.CF_DIB, CLIPBRD_FORMAT.CF_DIBV5):
+            msg = CLIPRDR_FORMAT_DATA_RESPONSE()
+            msg.dataobj = buff.read()
+            return msg
+        return _orig_from_buffer(buff, otype)
+
+    CLIPRDR_FORMAT_DATA_RESPONSE.from_buffer = _patched_from_buffer
+    _aardwolf_patched = True
+
+
+class _RawBytes:
+    """Tiny wrapper exposing a to_bytes() method — aardwolf calls this on
+    non-text clipboard payloads in CLIPRDR_FORMAT_DATA_RESPONSE.to_bytes."""
+
+    __slots__ = ("_data",)
+
+    def __init__(self, data: bytes) -> None:
+        self._data = data
+
+    def to_bytes(self) -> bytes:
+        return self._data
+
+
+class _ClipImageData:
+    """Minimal object matching the RDP_CLIPBOARD_DATA protocol for CF_DIB."""
+
+    def __init__(self, dib_bytes: bytes) -> None:
+        from aardwolf.commons.queuedata import RDPDATATYPE
+        from aardwolf.extensions.RDPECLIP.protocol.formatlist import CLIPBRD_FORMAT
+
+        self.type = RDPDATATYPE.CLIPBOARD_DATA_TXT
+        self.datatype = CLIPBRD_FORMAT.CF_DIB
+        self.data = _RawBytes(dib_bytes)
+
+    def __eq__(self, other) -> bool:
+        return (
+            isinstance(other, _ClipImageData)
+            and self.data._data == other.data._data
+        )
 
 # ---------------------------------------------------------------------------
 # User-friendly error mapping
@@ -68,6 +129,9 @@ class RDPConnection(AbstractConnection):
     """RDP connection using aardwolf (pure Python, no external tools)."""
 
     frame_updated = Signal(QImage)
+    clipboard_text_received = Signal(str)
+    clipboard_image_received = Signal(QImage)
+    clipboard_ready = Signal()
 
     def __init__(
         self,
@@ -96,6 +160,7 @@ class RDPConnection(AbstractConnection):
         self._stop_event = threading.Event()
         self._desktop_image: QImage | None = None
         self._mcs_channel_id: int | None = None
+        self._image_hooks_installed = False
 
     @property
     def is_connected(self) -> bool:
@@ -132,10 +197,13 @@ class RDPConnection(AbstractConnection):
                 self._hostname = parts[0]
                 self._port = int(parts[1])
 
+        _patch_aardwolf_image_clipboard()
+
         from aardwolf.commons.iosettings import RDPIOSettings
         from aardwolf.commons.queuedata.constants import VIDEO_FORMAT
         from aardwolf.commons.target import RDPTarget
         from aardwolf.connection import RDPConnection as AardwolfRDP
+        from aardwolf.extensions.RDPECLIP.channel import RDPECLIPChannel
         from asyauth.common.constants import asyauthProtocol, asyauthSecret
         from asyauth.common.credentials import UniCredential
 
@@ -154,8 +222,14 @@ class RDPConnection(AbstractConnection):
         iosettings.video_bpp_max = min(self._color_depth, 32)
         iosettings.video_out_format = VIDEO_FORMAT.PIL
 
+        # We drive the Qt clipboard ourselves — aardwolf's pyperclip integration
+        # would fight us and isn't installed as a dependency anyway.
+        iosettings.clipboard_use_pyperclip = False
+
         if not self._clipboard:
-            iosettings.channels = []
+            iosettings.channels = [
+                ch for ch in iosettings.channels if ch is not RDPECLIPChannel
+            ]
 
         # Target
         target = RDPTarget(
@@ -232,6 +306,16 @@ class RDPConnection(AbstractConnection):
                         frame_dirty = False
                     else:
                         frame_dirty = True
+                elif data.type == RDPDATATYPE.CLIPBOARD_READY:
+                    self._install_clipboard_image_hooks()
+                    self.clipboard_ready.emit()
+                elif data.type == RDPDATATYPE.CLIPBOARD_DATA_TXT:
+                    if self._clipboard:
+                        self.clipboard_text_received.emit(data.data)
+                elif data.type == RDPDATATYPE.CLIPBOARD_NEW_DATA_AVAILABLE:
+                    # Server announces new clipboard data; aardwolf auto-requests
+                    # text. Images are driven by our monkey-patched handler.
+                    pass
 
         except Exception as exc:
             if not self._stop_event.is_set():
@@ -351,6 +435,128 @@ class RDPConnection(AbstractConnection):
         await self._rdp.handle_out_data(
             cli_input, sec_hdr, data_hdr, None, self._mcs_channel_id, False,
         )
+
+    # ------------------------------------------------------------------
+    # Clipboard
+    # ------------------------------------------------------------------
+
+    async def send_clipboard_text(self, text: str) -> None:
+        """Push a text value to the remote clipboard."""
+        if not (self._rdp and self._connected and self._clipboard):
+            return
+        try:
+            await self._rdp.set_current_clipboard_text(text)
+        except Exception:
+            logger.debug("send_clipboard_text failed", exc_info=True)
+
+    async def send_clipboard_image(self, image: QImage) -> None:
+        """Push a QImage to the remote clipboard as CF_DIB."""
+        if not (self._rdp and self._connected and self._clipboard):
+            return
+        if image is None or image.isNull():
+            return
+        try:
+            dib = self._qimage_to_dib(image)
+            clip_data = _ClipImageData(dib)
+            await self._rdp.iosettings.clipboard.set_data(clip_data)
+        except Exception:
+            logger.debug("send_clipboard_image failed", exc_info=True)
+
+    @staticmethod
+    def _qimage_to_dib(image: QImage) -> bytes:
+        """QImage → CF_DIB: write BMP to memory and strip the 14-byte file header."""
+        buf = QBuffer()
+        buf.open(QIODevice.OpenModeFlag.WriteOnly)
+        image.save(buf, "BMP")
+        bmp_bytes = bytes(buf.data())
+        return bmp_bytes[14:]  # drop BITMAPFILEHEADER
+
+    @staticmethod
+    def _dib_to_qimage(dib_bytes: bytes) -> QImage | None:
+        """CF_DIB → QImage: synthesize the BITMAPFILEHEADER and parse as BMP."""
+        if len(dib_bytes) < 40:
+            return None
+        # DIB header size is at the start (BITMAPINFOHEADER.biSize = 40, V5 = 124).
+        header_size = int.from_bytes(dib_bytes[:4], "little")
+        # Color table follows the header; data offset skips DIB header + color table.
+        # For 24/32-bpp images the color table is absent (biClrUsed=0), so offset
+        # == 14 + header_size. For paletted formats this is approximate; we let
+        # QImage best-effort decode.
+        data_offset = 14 + header_size
+        file_size = 14 + len(dib_bytes)
+        file_header = (
+            b"BM"
+            + file_size.to_bytes(4, "little")
+            + b"\x00\x00\x00\x00"
+            + data_offset.to_bytes(4, "little")
+        )
+        img = QImage()
+        if img.loadFromData(QByteArray(file_header + dib_bytes), "BMP"):
+            return img
+        return None
+
+    def _install_clipboard_image_hooks(self) -> None:
+        """Instance-level monkey-patches on the cliprdr channel to handle
+        CF_DIB/CF_DIBV5 format announcements and data responses."""
+        if not self._rdp or self._image_hooks_installed:
+            return
+        try:
+            channels = getattr(self._rdp, "_RDPConnection__joined_channels")
+            cliprdr = channels.get("cliprdr")
+        except AttributeError:
+            cliprdr = None
+        if cliprdr is None:
+            return
+
+        from aardwolf.extensions.RDPECLIP.protocol import (
+            CB_TYPE,
+            CLIPRDR_FORMAT_DATA_REQUEST,
+            CLIPRDR_HEADER,
+        )
+        from aardwolf.extensions.RDPECLIP.protocol.formatlist import CLIPBRD_FORMAT
+
+        _orig_handle_fmt_list = cliprdr._handle_format_list
+        _orig_handle_fmt_data_resp = cliprdr._handle_format_data_response
+        conn_ref = self  # captured for async callbacks
+
+        async def _patched_handle_format_list(fmtl):
+            await _orig_handle_fmt_list(fmtl)
+            # aardwolf already auto-requests CF_UNICODETEXT. If the server also
+            # advertises a bitmap format AND no text is on offer, ask for the
+            # image instead. (If both are on offer we let text win — matches
+            # how Windows RDP prioritizes.)
+            if CLIPBRD_FORMAT.CF_UNICODETEXT in cliprdr.current_server_formats:
+                return
+            for img_fmt in (CLIPBRD_FORMAT.CF_DIB, CLIPBRD_FORMAT.CF_DIBV5):
+                if img_fmt in cliprdr.current_server_formats:
+                    # Name-mangled private attr — set the "requested" marker so
+                    # the response handler parses it as an image.
+                    cliprdr._RDPECLIPChannel__requested_format = img_fmt
+                    dreq = CLIPRDR_FORMAT_DATA_REQUEST()
+                    dreq.requestedFormatId = img_fmt
+                    msg = CLIPRDR_HEADER.serialize_packet(
+                        CB_TYPE.CB_FORMAT_DATA_REQUEST, 0, dreq,
+                    )
+                    await cliprdr.fragment_and_send(msg)
+                    return
+
+        async def _patched_handle_format_data_response(fmtdata):
+            requested = getattr(
+                cliprdr, "_RDPECLIPChannel__requested_format", None,
+            )
+            if requested in (CLIPBRD_FORMAT.CF_DIB, CLIPBRD_FORMAT.CF_DIBV5):
+                try:
+                    img = RDPConnection._dib_to_qimage(fmtdata.dataobj)
+                    if img is not None and not img.isNull() and conn_ref._clipboard:
+                        conn_ref.clipboard_image_received.emit(img)
+                except Exception:
+                    logger.debug("CF_DIB decode failed", exc_info=True)
+                return
+            await _orig_handle_fmt_data_resp(fmtdata)
+
+        cliprdr._handle_format_list = _patched_handle_format_list
+        cliprdr._handle_format_data_response = _patched_handle_format_data_response
+        self._image_hooks_installed = True
 
     # ------------------------------------------------------------------
     # AbstractConnection interface (not used for RDP)

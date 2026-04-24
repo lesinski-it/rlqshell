@@ -212,6 +212,23 @@ class HostEditorContent(QWidget):
             self._rdp_audio_check, self._rdp_clipboard_check,
         ]
 
+        # VNC options section
+        self._vnc_header = QLabel("VNC Options")
+        self._vnc_header.setStyleSheet(
+            f"font-size: 14px; font-weight: 600; color: {Colors.TEXT_PRIMARY}; "
+            f"background: transparent; padding-top: 8px;"
+        )
+        self._form_layout.addWidget(self._vnc_header)
+
+        self._vnc_clipboard_check = QCheckBox("Enable Clipboard Sharing")
+        self._vnc_clipboard_check.setChecked(True)
+        self._form_layout.addWidget(self._vnc_clipboard_check)
+
+        self._vnc_widgets: list[QWidget] = [
+            self._vnc_header,
+            self._vnc_clipboard_check,
+        ]
+
         # Notes
         self._notes_edit = QTextEdit()
         self._notes_edit.setMaximumHeight(80)
@@ -290,6 +307,7 @@ class HostEditorContent(QWidget):
         self._rdp_color_depth_combo.currentIndexChanged.connect(self._schedule_save)
         self._rdp_audio_check.stateChanged.connect(self._schedule_save)
         self._rdp_clipboard_check.stateChanged.connect(self._schedule_save)
+        self._vnc_clipboard_check.stateChanged.connect(self._schedule_save)
 
         # Show correct protocol section initially
         self._update_protocol_sections("ssh")
@@ -313,6 +331,7 @@ class HostEditorContent(QWidget):
         self._compression_check.blockSignals(True)
         self._rdp_audio_check.blockSignals(True)
         self._rdp_clipboard_check.blockSignals(True)
+        self._vnc_clipboard_check.blockSignals(True)
 
         self._label_edit.setText(host.label)
         self._address_edit.setText(host.address)
@@ -334,6 +353,7 @@ class HostEditorContent(QWidget):
             self._rdp_color_depth_combo.setCurrentIndex(idx)
         self._rdp_audio_check.setChecked(host.rdp_audio)
         self._rdp_clipboard_check.setChecked(host.rdp_clipboard)
+        self._vnc_clipboard_check.setChecked(host.vnc_clipboard)
 
         # Load identities
         self._identity_combo.blockSignals(True)
@@ -366,6 +386,7 @@ class HostEditorContent(QWidget):
         self._compression_check.blockSignals(False)
         self._rdp_audio_check.blockSignals(False)
         self._rdp_clipboard_check.blockSignals(False)
+        self._vnc_clipboard_check.blockSignals(False)
 
         # Load tags
         self._tag_selector.set_tags([
@@ -455,6 +476,7 @@ class HostEditorContent(QWidget):
         self._host.rdp_color_depth = int(self._rdp_color_depth_combo.currentText())
         self._host.rdp_audio = self._rdp_audio_check.isChecked()
         self._host.rdp_clipboard = self._rdp_clipboard_check.isChecked()
+        self._host.vnc_clipboard = self._vnc_clipboard_check.isChecked()
         self._host.notes = self._notes_edit.toPlainText() or None
         self._host.group_id = self._group_combo.currentData()
         identity_data = self._identity_combo.currentData()
@@ -495,6 +517,8 @@ class HostEditorContent(QWidget):
             w.setVisible(protocol == "ssh")
         for w in self._rdp_widgets:
             w.setVisible(protocol == "rdp")
+        for w in self._vnc_widgets:
+            w.setVisible(protocol == "vnc")
 
     def _on_protocol_changed(self, protocol: str) -> None:
         """Update the port default and visible sections when protocol changes."""

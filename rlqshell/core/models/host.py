@@ -72,6 +72,7 @@ class Host:
     vnc_port: int = 5900
     vnc_quality: str = "auto"
     vnc_view_only: bool = False
+    vnc_clipboard: bool = True
 
     # Telnet settings
     telnet_port: int = 23
