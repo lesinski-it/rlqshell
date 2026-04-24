@@ -351,6 +351,34 @@ class VNCConnection(AbstractConnection):
         except OSError:
             pass
 
+    async def send_typed_text(self, text: str, delay_ms: int = 5) -> None:
+        """Stream text to the server as a sequence of key presses.
+
+        Workaround for servers like QEMU -vnc that never implement cut-text.
+        Each character becomes a KeyDown + KeyUp event with a small inter-
+        character delay so the guest OS doesn't drop keys under buffering.
+
+        Latin-1 characters map to keysym = ord(c); characters above U+00FF use
+        the X11 Unicode keysym convention (0x01000000 | codepoint).
+        """
+        if not self._connected or self._view_only or not self._sock:
+            return
+        special = {"\n": 0xFF0D, "\r": 0xFF0D, "\t": 0xFF09}
+        step = max(0.0, delay_ms / 1000.0)
+        for char in text:
+            if char in special:
+                keysym = special[char]
+            elif ord(char) >= 0x20:
+                cp = ord(char)
+                keysym = cp if cp < 0x100 else (0x01000000 | cp)
+            else:
+                continue
+            self.send_key_event(True, keysym)
+            self.send_key_event(False, keysym)
+            if step:
+                await asyncio.sleep(step)
+        logger.info("VNC typed-paste finished: %d chars", len(text))
+
     def send_client_cut_text(self, text: str) -> None:
         """Send RFB ClientCutText (msg type 6) — client's clipboard → server."""
         if not self._connected:

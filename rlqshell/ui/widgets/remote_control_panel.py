@@ -8,6 +8,7 @@ from functools import partial
 
 from PySide6.QtCore import QEasingCurve, QEvent, QPoint, QPropertyAnimation, Qt, QTimer, Signal
 from PySide6.QtWidgets import (
+    QApplication,
     QHBoxLayout,
     QPushButton,
     QVBoxLayout,
@@ -79,6 +80,16 @@ class RemoteControlPanel(QWidget):
         prt_btn.setToolTip("Print Screen")
         layout.addWidget(prt_btn)
 
+        # VNC-only: typed paste from clipboard (for servers like QEMU-VNC
+        # that don't implement cut-text). Hidden for RDP (its CLIPRDR works).
+        self._paste_btn = self._make_button("Wklej", self._paste_typed)
+        self._paste_btn.setToolTip(
+            "Wklej tekst ze schowka jako wpisywany z klawiatury\n"
+            "(dla VNC serwer\u00f3w bez obs\u0142ugi cut-text, np. QEMU)"
+        )
+        self._paste_btn.hide()
+        layout.addWidget(self._paste_btn)
+
         # Separator
         layout.addSpacing(8)
 
@@ -97,6 +108,7 @@ class RemoteControlPanel(QWidget):
         """Attach the remote connection (VNCConnection or RDPConnection)."""
         self._conn = conn
         self._protocol = protocol
+        self._paste_btn.setVisible(protocol == "vnc")
 
     # ------------------------------------------------------------------
     # Button factory
@@ -192,6 +204,19 @@ class RemoteControlPanel(QWidget):
     # ------------------------------------------------------------------
     # Key combos
     # ------------------------------------------------------------------
+
+    def _paste_typed(self) -> None:
+        """Send QClipboard text to the remote as a stream of key presses."""
+        if self._protocol != "vnc" or self._conn is None:
+            return
+        text = QApplication.clipboard().text()
+        if not text:
+            logger.info("Paste-as-typing skipped: clipboard is empty")
+            return
+        try:
+            asyncio.ensure_future(self._conn.send_typed_text(text))
+        except RuntimeError:
+            logger.debug("no running loop for send_typed_text")
 
     def _send_ctrl_alt_del(self) -> None:
         """Send Ctrl+Alt+Del combo."""
