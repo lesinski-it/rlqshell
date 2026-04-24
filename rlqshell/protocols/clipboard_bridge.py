@@ -42,6 +42,8 @@ class ClipboardBridge(QObject):
             conn.clipboard_image_received.connect(self._on_remote_image)
             conn.clipboard_ready.connect(self._on_ready)
 
+        logger.info("ClipboardBridge created for %s session", protocol)
+
     @Slot()
     def _on_ready(self) -> None:
         self._ready = True
@@ -103,9 +105,19 @@ class ClipboardBridge(QObject):
             if not text:
                 return
             fp = self._fp_text(text)
-            if fp == self._last_remote_fp or fp == self._last_local_fp:
+            if fp == self._last_remote_fp:
+                logger.debug(
+                    "ClipboardBridge[%s]: local text matches last remote, skip echo",
+                    self._protocol,
+                )
+                return
+            if fp == self._last_local_fp:
                 return
             self._last_local_fp = fp
+            logger.info(
+                "ClipboardBridge[%s]: local text → remote (%d chars, preview=%r)",
+                self._protocol, len(text), text[:80],
+            )
             if self._protocol == "rdp":
                 try:
                     asyncio.ensure_future(self._conn.send_clipboard_text(text))
@@ -122,8 +134,16 @@ class ClipboardBridge(QObject):
     def _on_remote_text(self, text: str) -> None:
         fp = self._fp_text(text)
         if fp == self._last_local_fp:
+            logger.debug(
+                "ClipboardBridge[%s]: remote text matches last local, skip echo",
+                self._protocol,
+            )
             return
         self._last_remote_fp = fp
+        logger.info(
+            "ClipboardBridge[%s]: remote text → QClipboard (%d chars, preview=%r)",
+            self._protocol, len(text), text[:80],
+        )
         self._clipboard.setText(text, mode=self._clipboard.Mode.Clipboard)
 
     @Slot(QImage)

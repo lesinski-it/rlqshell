@@ -178,6 +178,10 @@ class VNCConnection(AbstractConnection):
 
         self._connected = True
         sock.settimeout(0.5)
+        logger.info(
+            "VNC connected: desktop=%r size=%dx%d clipboard=%s view_only=%s",
+            self._name, self._width, self._height, self._clipboard, self._view_only,
+        )
 
         # Start reader thread
         self._stop_event.clear()
@@ -305,9 +309,12 @@ class VNCConnection(AbstractConnection):
         header = self._recv_exact(7)
         length = struct.unpack("!xxxI", header)[0]
         payload = self._recv_exact(length)
-        if self._clipboard:
-            text = payload.decode("latin-1", errors="replace")
-            self.clipboard_text_received.emit(text)
+        if not self._clipboard:
+            logger.info("VNC ServerCutText ignored (clipboard disabled): %d bytes", length)
+            return
+        text = payload.decode("latin-1", errors="replace")
+        logger.info("VNC ServerCutText received: %d bytes, preview=%r", length, text[:80])
+        self.clipboard_text_received.emit(text)
 
     def _emit_frame(self) -> None:
         if not self._fb_data:
@@ -346,13 +353,24 @@ class VNCConnection(AbstractConnection):
 
     def send_client_cut_text(self, text: str) -> None:
         """Send RFB ClientCutText (msg type 6) — client's clipboard → server."""
-        if not self._connected or self._view_only or not self._clipboard or not self._sock:
+        if not self._connected:
+            logger.info("VNC ClientCutText skipped: not connected")
+            return
+        if self._view_only:
+            logger.info("VNC ClientCutText skipped: view_only is enabled for this host")
+            return
+        if not self._clipboard:
+            logger.info("VNC ClientCutText skipped: clipboard is disabled for this host")
+            return
+        if not self._sock:
+            logger.info("VNC ClientCutText skipped: no socket")
             return
         payload = text.encode("latin-1", errors="replace")
         try:
             self._sock.sendall(struct.pack("!BxxxI", 6, len(payload)) + payload)
-        except OSError:
-            pass
+            logger.info("VNC ClientCutText sent: %d bytes, preview=%r", len(payload), text[:80])
+        except OSError as exc:
+            logger.warning("VNC ClientCutText send failed: %s", exc)
 
     # ------------------------------------------------------------------
     # AbstractConnection interface (unused for VNC)
