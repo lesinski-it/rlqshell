@@ -38,7 +38,6 @@ vault.key
 # Logs (runtime stderr/stdout dumps and per-pid logs)
 *.log
 rlqshell_*.log
-termplus_*.log
 
 # Local debug artifacts
 splash_test.png
@@ -46,7 +45,6 @@ splash_test.png
 # Claude Code workspace (per-user settings, docs, project instructions)
 .claude/
 CLAUDE.md
-todo.txt
 
 # Virtual environment (actual project venv)
 .venv313/
