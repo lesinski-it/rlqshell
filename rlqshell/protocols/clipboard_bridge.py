@@ -35,14 +35,34 @@ class ClipboardBridge(QObject):
         self._last_remote_fp: bytes | None = None
         self._ready = protocol == "vnc"  # VNC is ready on connect; RDP waits for CLIPRDR_READY
 
-        self._clipboard.dataChanged.connect(self._on_local_changed)
-        conn.clipboard_text_received.connect(self._on_remote_text)
+        # Load configuration from app config
+        clipboard_enabled = True
+        try:
+            app = QApplication.instance()
+            config = getattr(app, "config", None)
+            if config:
+                clipboard_enabled = config.get("clipboard.enabled", True)
+                self._text_limit = config.get("clipboard.text_size_limit_kb", 500) * 1024
+                self._image_limit = config.get("clipboard.image_size_limit_mb", 25) * 1024 * 1024
+            else:
+                self._text_limit = 500 * 1024
+                self._image_limit = 25 * 1024 * 1024
+        except Exception:
+            self._text_limit = 500 * 1024
+            self._image_limit = 25 * 1024 * 1024
 
-        if protocol == "rdp":
-            conn.clipboard_image_received.connect(self._on_remote_image)
-            conn.clipboard_ready.connect(self._on_ready)
+        # Only connect signals if clipboard is globally enabled
+        if clipboard_enabled:
+            self._clipboard.dataChanged.connect(self._on_local_changed)
+            conn.clipboard_text_received.connect(self._on_remote_text)
 
-        logger.info("ClipboardBridge created for %s session", protocol)
+            if protocol == "rdp":
+                conn.clipboard_image_received.connect(self._on_remote_image)
+                conn.clipboard_ready.connect(self._on_ready)
+
+            logger.info("ClipboardBridge created for %s session", protocol)
+        else:
+            logger.info("ClipboardBridge disabled for %s session (global config)", protocol)
 
     @Slot()
     def _on_ready(self) -> None:
@@ -90,6 +110,14 @@ class ClipboardBridge(QObject):
             image = self._clipboard.image()
             if image is None or image.isNull():
                 return
+            # Check image size (estimate: width * height * 4 bytes per pixel)
+            raw_size = image.width() * image.height() * 4
+            if raw_size > self._image_limit:
+                logger.warning(
+                    "ClipboardBridge[rdp]: image too large (%dx%d = ~%d MB), skip",
+                    image.width(), image.height(), raw_size // (1024 * 1024),
+                )
+                return
             fp = self._fp_image(image)
             if fp == self._last_remote_fp or fp == self._last_local_fp:
                 return
@@ -103,6 +131,14 @@ class ClipboardBridge(QObject):
         if mime.hasText():
             text = mime.text()
             if not text:
+                return
+            # Check text size (encode to see actual byte length)
+            text_bytes = len(text.encode("utf-8", errors="replace"))
+            if text_bytes > self._text_limit:
+                logger.warning(
+                    "ClipboardBridge[%s]: text too large (%d bytes = ~%.1f MB), skip",
+                    self._protocol, text_bytes, text_bytes / (1024 * 1024),
+                )
                 return
             fp = self._fp_text(text)
             if fp == self._last_remote_fp:

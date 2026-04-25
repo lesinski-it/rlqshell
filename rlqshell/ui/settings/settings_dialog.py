@@ -18,6 +18,7 @@ from rlqshell.app.constants import Colors
 from rlqshell.ui.settings.about_settings import AboutSettings
 from rlqshell.ui.settings.appearance_settings import AppearanceSettings
 from rlqshell.ui.settings.backup_settings import BackupSettings
+from rlqshell.ui.settings.clipboard_settings import ClipboardSettings
 from rlqshell.ui.settings.general_settings import GeneralSettings
 from rlqshell.ui.settings.keybinding_settings import KeybindingSettings
 from rlqshell.ui.settings.sync_settings import SyncSettings
@@ -92,6 +93,7 @@ class SettingsDialog(QDialog):
         appearance_page = AppearanceSettings(config)
         appearance_page.appearance_settings_changed.connect(self.appearance_settings_changed)
         self._add_page("Appearance", appearance_page)
+        self._add_page("Clipboard", ClipboardSettings(config))
         self._add_page("Key Bindings", KeybindingSettings(config))
         self._add_page("Sync", SyncSettings(
             config, sync_engine=sync_engine,

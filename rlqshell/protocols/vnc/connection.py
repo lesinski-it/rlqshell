@@ -351,7 +351,12 @@ class VNCConnection(AbstractConnection):
         except OSError:
             pass
 
-    async def send_typed_text(self, text: str, delay_ms: int = 5) -> None:
+    async def send_typed_text(
+        self,
+        text: str,
+        delay_ms: int = 5,
+        progress_cb=None,
+    ) -> None:
         """Stream text to the server as a sequence of key presses.
 
         Workaround for servers like QEMU -vnc that never implement cut-text.
@@ -360,11 +365,14 @@ class VNCConnection(AbstractConnection):
 
         Latin-1 characters map to keysym = ord(c); characters above U+00FF use
         the X11 Unicode keysym convention (0x01000000 | codepoint).
+
+        progress_cb: optional callable(done: int, total: int) for progress updates.
         """
         if not self._connected or self._view_only or not self._sock:
             return
         special = {"\n": 0xFF0D, "\r": 0xFF0D, "\t": 0xFF09}
         step = max(0.0, delay_ms / 1000.0)
+        done = 0
         for char in text:
             if char in special:
                 keysym = special[char]
@@ -375,6 +383,9 @@ class VNCConnection(AbstractConnection):
                 continue
             self.send_key_event(True, keysym)
             self.send_key_event(False, keysym)
+            done += 1
+            if progress_cb:
+                progress_cb(done, len(text))
             if step:
                 await asyncio.sleep(step)
         logger.info("VNC typed-paste finished: %d chars", len(text))
