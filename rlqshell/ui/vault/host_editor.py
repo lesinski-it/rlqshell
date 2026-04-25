@@ -202,6 +202,37 @@ class HostEditorContent(QWidget):
         self._rdp_clipboard_check.setChecked(True)
         self._form_layout.addWidget(self._rdp_clipboard_check)
 
+        # Local resources (RDPDR via FreeRDP)
+        self._rdp_resources_header = QLabel("Local Resources")
+        self._rdp_resources_header.setStyleSheet(
+            f"font-size: 13px; font-weight: 600; color: {Colors.TEXT_PRIMARY}; "
+            f"background: transparent; padding-top: 8px;"
+        )
+        self._form_layout.addWidget(self._rdp_resources_header)
+
+        self._rdp_smartcard_check = QCheckBox("Smart cards (e.g. electronic signature)")
+        self._form_layout.addWidget(self._rdp_smartcard_check)
+
+        self._rdp_drives_check = QCheckBox("Local drives / folders")
+        self._form_layout.addWidget(self._rdp_drives_check)
+
+        self._rdp_drive_mapping_edit = QLineEdit()
+        self._rdp_drive_mapping_edit.setPlaceholderText(
+            r"Paths separated by ;  e.g. C:\;D:\Projects   (empty = home folder)",
+        )
+        self._rdp_drive_mapping_lbl, _ = self._add_field(
+            "Drive paths", self._rdp_drive_mapping_edit,
+        )
+
+        self._rdp_printers_check = QCheckBox("Local printers")
+        self._form_layout.addWidget(self._rdp_printers_check)
+
+        # Drive paths field is only meaningful when drive redirection is enabled
+        self._rdp_drives_check.toggled.connect(self._rdp_drive_mapping_edit.setEnabled)
+        self._rdp_drives_check.toggled.connect(self._rdp_drive_mapping_lbl.setEnabled)
+        self._rdp_drive_mapping_edit.setEnabled(False)
+        self._rdp_drive_mapping_lbl.setEnabled(False)
+
         # Collect RDP widgets for visibility toggling
         self._rdp_widgets: list[QWidget] = [
             self._rdp_header,
@@ -210,6 +241,11 @@ class HostEditorContent(QWidget):
             self._rdp_resolution_lbl, self._rdp_resolution_combo,
             self._rdp_color_depth_lbl, self._rdp_color_depth_combo,
             self._rdp_audio_check, self._rdp_clipboard_check,
+            self._rdp_resources_header,
+            self._rdp_smartcard_check,
+            self._rdp_drives_check,
+            self._rdp_drive_mapping_lbl, self._rdp_drive_mapping_edit,
+            self._rdp_printers_check,
         ]
 
         # VNC options section
@@ -307,6 +343,10 @@ class HostEditorContent(QWidget):
         self._rdp_color_depth_combo.currentIndexChanged.connect(self._schedule_save)
         self._rdp_audio_check.stateChanged.connect(self._schedule_save)
         self._rdp_clipboard_check.stateChanged.connect(self._schedule_save)
+        self._rdp_smartcard_check.stateChanged.connect(self._schedule_save)
+        self._rdp_drives_check.stateChanged.connect(self._schedule_save)
+        self._rdp_drive_mapping_edit.textChanged.connect(self._schedule_save)
+        self._rdp_printers_check.stateChanged.connect(self._schedule_save)
         self._vnc_clipboard_check.stateChanged.connect(self._schedule_save)
 
         # Show correct protocol section initially
@@ -322,7 +362,8 @@ class HostEditorContent(QWidget):
         # Block signals during load
         for w in [self._label_edit, self._address_edit, self._port_spin,
                    self._keep_alive_spin, self._notes_edit,
-                   self._rdp_username_edit, self._rdp_domain_edit]:
+                   self._rdp_username_edit, self._rdp_domain_edit,
+                   self._rdp_drive_mapping_edit]:
             w.blockSignals(True)
         for w in [self._protocol_combo, self._group_combo,
                   self._rdp_resolution_combo, self._rdp_color_depth_combo]:
@@ -331,6 +372,9 @@ class HostEditorContent(QWidget):
         self._compression_check.blockSignals(True)
         self._rdp_audio_check.blockSignals(True)
         self._rdp_clipboard_check.blockSignals(True)
+        self._rdp_smartcard_check.blockSignals(True)
+        self._rdp_drives_check.blockSignals(True)
+        self._rdp_printers_check.blockSignals(True)
         self._vnc_clipboard_check.blockSignals(True)
 
         self._label_edit.setText(host.label)
@@ -353,6 +397,12 @@ class HostEditorContent(QWidget):
             self._rdp_color_depth_combo.setCurrentIndex(idx)
         self._rdp_audio_check.setChecked(host.rdp_audio)
         self._rdp_clipboard_check.setChecked(host.rdp_clipboard)
+        self._rdp_smartcard_check.setChecked(host.rdp_smartcard)
+        self._rdp_drives_check.setChecked(host.rdp_drives_enabled)
+        self._rdp_drive_mapping_edit.setText(host.rdp_drive_mapping or "")
+        self._rdp_drive_mapping_edit.setEnabled(host.rdp_drives_enabled)
+        self._rdp_drive_mapping_lbl.setEnabled(host.rdp_drives_enabled)
+        self._rdp_printers_check.setChecked(host.rdp_printers)
         self._vnc_clipboard_check.setChecked(host.vnc_clipboard)
 
         # Load identities
@@ -377,7 +427,8 @@ class HostEditorContent(QWidget):
         # Unblock
         for w in [self._label_edit, self._address_edit, self._port_spin,
                    self._keep_alive_spin, self._notes_edit,
-                   self._rdp_username_edit, self._rdp_domain_edit]:
+                   self._rdp_username_edit, self._rdp_domain_edit,
+                   self._rdp_drive_mapping_edit]:
             w.blockSignals(False)
         for w in [self._protocol_combo, self._group_combo,
                   self._rdp_resolution_combo, self._rdp_color_depth_combo]:
@@ -386,6 +437,9 @@ class HostEditorContent(QWidget):
         self._compression_check.blockSignals(False)
         self._rdp_audio_check.blockSignals(False)
         self._rdp_clipboard_check.blockSignals(False)
+        self._rdp_smartcard_check.blockSignals(False)
+        self._rdp_drives_check.blockSignals(False)
+        self._rdp_printers_check.blockSignals(False)
         self._vnc_clipboard_check.blockSignals(False)
 
         # Load tags
@@ -476,6 +530,10 @@ class HostEditorContent(QWidget):
         self._host.rdp_color_depth = int(self._rdp_color_depth_combo.currentText())
         self._host.rdp_audio = self._rdp_audio_check.isChecked()
         self._host.rdp_clipboard = self._rdp_clipboard_check.isChecked()
+        self._host.rdp_smartcard = self._rdp_smartcard_check.isChecked()
+        self._host.rdp_drives_enabled = self._rdp_drives_check.isChecked()
+        self._host.rdp_drive_mapping = self._rdp_drive_mapping_edit.text() or None
+        self._host.rdp_printers = self._rdp_printers_check.isChecked()
         self._host.vnc_clipboard = self._vnc_clipboard_check.isChecked()
         self._host.notes = self._notes_edit.toPlainText() or None
         self._host.group_id = self._group_combo.currentData()

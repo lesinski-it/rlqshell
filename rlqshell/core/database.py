@@ -74,6 +74,9 @@ CREATE TABLE IF NOT EXISTS hosts (
     rdp_audio BOOLEAN DEFAULT 0,
     rdp_clipboard BOOLEAN DEFAULT 1,
     rdp_drive_mapping TEXT,
+    rdp_smartcard BOOLEAN DEFAULT 0,
+    rdp_drives_enabled BOOLEAN DEFAULT 0,
+    rdp_printers BOOLEAN DEFAULT 0,
     vnc_port INTEGER DEFAULT 5900,
     vnc_quality TEXT DEFAULT 'auto'
         CHECK(vnc_quality IN ('auto','lan','broadband','low')),
@@ -397,6 +400,11 @@ class Database:
         _add_column_if_missing("tags", "updated_at", "updated_at TIMESTAMP")
         _add_column_if_missing("hosts", "sync_uuid", "sync_uuid TEXT")
         _add_column_if_missing("hosts", "vnc_clipboard", "vnc_clipboard BOOLEAN DEFAULT 1")
+        _add_column_if_missing("hosts", "rdp_smartcard", "rdp_smartcard BOOLEAN DEFAULT 0")
+        _add_column_if_missing(
+            "hosts", "rdp_drives_enabled", "rdp_drives_enabled BOOLEAN DEFAULT 0",
+        )
+        _add_column_if_missing("hosts", "rdp_printers", "rdp_printers BOOLEAN DEFAULT 0")
         _add_column_if_missing("host_tags", "sync_uuid", "sync_uuid TEXT")
         _add_column_if_missing("host_tags", "created_at", "created_at TIMESTAMP")
         _add_column_if_missing("host_tags", "updated_at", "updated_at TIMESTAMP")

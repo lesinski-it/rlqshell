@@ -487,7 +487,7 @@ class ConnectionsPage(QWidget):
         asyncio.ensure_future(self._connect_async(tab_id, conn, host))
 
     def _open_rdp(self, host: Host) -> None:
-        """Open an RDP graphical session (pure Python via aardwolf)."""
+        """Open an RDP graphical session (FreeRDP subprocess embedded in our window)."""
         tab_id = str(uuid.uuid4())[:8]
         label = host.label or host.address
 
@@ -522,12 +522,19 @@ class ConnectionsPage(QWidget):
             domain=host.rdp_domain,
             resolution=host.rdp_resolution,
             color_depth=host.rdp_color_depth,
+            audio=host.rdp_audio,
             clipboard=host.rdp_clipboard,
+            smartcard=host.rdp_smartcard,
+            drives_enabled=host.rdp_drives_enabled,
+            drive_mapping=host.rdp_drive_mapping,
+            printers=host.rdp_printers,
         )
 
         rdp_widget = RDPWidget(conn)
+        # FreeRDP renders into our window via /parent-window — clipboard sync is
+        # done by FreeRDP at the OS level, so the in-app bridge is not needed.
         container = RemoteDesktopContainer(
-            rdp_widget, conn, "rdp", enable_clipboard=host.rdp_clipboard,
+            rdp_widget, conn, "rdp", enable_clipboard=False,
         )
         self._terminal_stack.addWidget(container)
         container.fullscreen_requested.connect(self._tab_bar.fullscreen_requested)
@@ -912,10 +919,15 @@ class ConnectionsPage(QWidget):
             domain=host.rdp_domain,
             resolution=host.rdp_resolution,
             color_depth=host.rdp_color_depth,
+            audio=host.rdp_audio,
             clipboard=host.rdp_clipboard,
+            smartcard=host.rdp_smartcard,
+            drives_enabled=host.rdp_drives_enabled,
+            drive_mapping=host.rdp_drive_mapping,
+            printers=host.rdp_printers,
         )
 
-        container.set_connection(conn, "rdp", enable_clipboard=host.rdp_clipboard)
+        container.set_connection(conn, "rdp", enable_clipboard=False)
         conn.connected.connect(container.clear_overlay)
         conn.disconnected.connect(lambda tid=tab_id: self._on_disconnected(tid))
         conn.error.connect(lambda msg, tid=tab_id: self._on_error(tid, msg))

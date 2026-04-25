@@ -67,6 +67,9 @@ class Host:
     rdp_audio: bool = False
     rdp_clipboard: bool = True
     rdp_drive_mapping: str | None = None
+    rdp_smartcard: bool = False
+    rdp_drives_enabled: bool = False
+    rdp_printers: bool = False
 
     # VNC settings
     vnc_port: int = 5900
