@@ -47,6 +47,9 @@ class RemoteControlPanel(QWidget):
         # Sticky modifier states
         self._held: dict[str, bool] = {"ctrl": False, "alt": False, "win": False}
 
+        # Paste-as-typing state
+        self._typing_task = None
+
         layout = QVBoxLayout(self)
         layout.setContentsMargins(4, 8, 4, 8)
         layout.setSpacing(4)
@@ -206,17 +209,48 @@ class RemoteControlPanel(QWidget):
     # ------------------------------------------------------------------
 
     def _paste_typed(self) -> None:
-        """Send QClipboard text to the remote as a stream of key presses."""
+        """Send QClipboard text to the remote as a stream of key presses.
+
+        Click toggles between start/stop for long pastes (shows progress as %).
+        """
         if self._protocol != "vnc" or self._conn is None:
             return
+
+        # If a paste is in progress, cancel it
+        if self._typing_task and not self._typing_task.done():
+            try:
+                self._typing_task.cancel()
+                logger.info("Paste-as-typing cancelled by user")
+            except Exception:
+                pass
+            self._typing_task = None
+            self._paste_btn.setText("Wklej")
+            self._paste_btn.setEnabled(True)
+            return
+
         text = QApplication.clipboard().text()
         if not text:
             logger.info("Paste-as-typing skipped: clipboard is empty")
             return
+
+        self._paste_btn.setEnabled(False)
+        self._paste_btn.setText("0%")
+
+        def _progress(done: int, total: int) -> None:
+            pct = int(done * 100 / total) if total else 100
+            self._paste_btn.setText(f"{pct}%")
+            if done >= total:
+                self._paste_btn.setText("Wklej")
+                self._paste_btn.setEnabled(True)
+
         try:
-            asyncio.ensure_future(self._conn.send_typed_text(text))
+            self._typing_task = asyncio.ensure_future(
+                self._conn.send_typed_text(text, progress_cb=_progress),
+            )
         except RuntimeError:
             logger.debug("no running loop for send_typed_text")
+            self._paste_btn.setText("Wklej")
+            self._paste_btn.setEnabled(True)
 
     def _send_ctrl_alt_del(self) -> None:
         """Send Ctrl+Alt+Del combo."""

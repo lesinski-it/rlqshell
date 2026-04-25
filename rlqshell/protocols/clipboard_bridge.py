@@ -13,6 +13,10 @@ from PySide6.QtWidgets import QApplication
 
 logger = logging.getLogger(__name__)
 
+# Size limits to prevent memory issues and timeouts
+_TEXT_LIMIT = 500_000  # ~500 KB (reasonable text paste limit)
+_IMAGE_LIMIT = 25_000_000  # ~25 MB raw pixel data (4K image)
+
 
 class ClipboardBridge(QObject):
     """Keeps QClipboard in sync with a remote session.
@@ -90,6 +94,14 @@ class ClipboardBridge(QObject):
             image = self._clipboard.image()
             if image is None or image.isNull():
                 return
+            # Check image size (estimate: width * height * 4 bytes per pixel)
+            raw_size = image.width() * image.height() * 4
+            if raw_size > _IMAGE_LIMIT:
+                logger.warning(
+                    "ClipboardBridge[rdp]: image too large (%dx%d = ~%d MB), skip",
+                    image.width(), image.height(), raw_size // (1024 * 1024),
+                )
+                return
             fp = self._fp_image(image)
             if fp == self._last_remote_fp or fp == self._last_local_fp:
                 return
@@ -103,6 +115,14 @@ class ClipboardBridge(QObject):
         if mime.hasText():
             text = mime.text()
             if not text:
+                return
+            # Check text size (encode to see actual byte length)
+            text_bytes = len(text.encode("utf-8", errors="replace"))
+            if text_bytes > _TEXT_LIMIT:
+                logger.warning(
+                    "ClipboardBridge[%s]: text too large (%d bytes = ~%.1f MB), skip",
+                    self._protocol, text_bytes, text_bytes / (1024 * 1024),
+                )
                 return
             fp = self._fp_text(text)
             if fp == self._last_remote_fp:
