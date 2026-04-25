@@ -244,8 +244,18 @@ class RemoteControlPanel(QWidget):
                 self._paste_btn.setEnabled(True)
 
         try:
+            # Get VNC paste delay from config
+            delay_ms = 5  # default
+            try:
+                app = QApplication.instance()
+                config = getattr(app, "config", None)
+                if config:
+                    delay_ms = config.get("clipboard.vnc_paste_delay_ms", 5)
+            except Exception:
+                pass
+
             self._typing_task = asyncio.ensure_future(
-                self._conn.send_typed_text(text, progress_cb=_progress),
+                self._conn.send_typed_text(text, delay_ms=delay_ms, progress_cb=_progress),
             )
         except RuntimeError:
             logger.debug("no running loop for send_typed_text")

@@ -48,6 +48,12 @@
         "auto_check": true,
         "check_interval_hours": 24
     },
+    "clipboard": {
+        "enabled": true,
+        "vnc_paste_delay_ms": 5,
+        "text_size_limit_kb": 500,
+        "image_size_limit_mb": 25
+    },
     "keybindings": {
         "command_palette": "Ctrl+K",
         "jump_to_tab": "Ctrl+J",
