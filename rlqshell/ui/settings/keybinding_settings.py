@@ -19,16 +19,23 @@ from rlqshell.app.constants import Colors
 
 # Default keybindings
 _DEFAULTS = {
-    "Command Palette": "Ctrl+K",
+    "Command Palette": "Ctrl+Shift+K",
     "Settings": "Ctrl+,",
     "New Host": "Ctrl+N",
-    "Close Tab": "Ctrl+W",
+    "Close Tab": "Ctrl+Shift+W",
     "Next Tab": "Ctrl+Tab",
     "Previous Tab": "Ctrl+Shift+Tab",
     "Copy": "Ctrl+Shift+C",
     "Paste": "Ctrl+Shift+V",
     "Find": "Ctrl+Shift+F",
     "Toggle Fullscreen": "F11",
+    "New Connection": "Ctrl+T",
+    "Split Vertical": "Ctrl+Shift+E",
+    "Split Horizontal": "Ctrl+Shift+O",
+    "Broadcast Mode": "Ctrl+Shift+B",
+    "Search Terminal": "Ctrl+Shift+F",
+    "Toggle Side Panel": "Ctrl+S",
+    "New Snippet": "Ctrl+Shift+N",
 }
 
 
@@ -80,7 +87,17 @@ class KeybindingSettings(QWidget):
 
         # Merge with defaults
         merged = dict(_DEFAULTS)
-        merged.update(bindings)
+
+        # Normalize old snake_case action names to Title Case
+        normalized_bindings = {}
+        for action, shortcut in bindings.items():
+            # Convert snake_case to Title Case if needed
+            normalized_action = self._normalize_action_name(action)
+            # Migrate old keybinding values to new ones
+            migrated_shortcut = self._migrate_shortcut(shortcut)
+            normalized_bindings[normalized_action] = migrated_shortcut
+
+        merged.update(normalized_bindings)
 
         self._table.setRowCount(len(merged))
         for row, (action, shortcut) in enumerate(merged.items()):
@@ -91,6 +108,21 @@ class KeybindingSettings(QWidget):
                 QLabel().palette().text().color()
             )
             self._table.setItem(row, 1, shortcut_item)
+
+    def _normalize_action_name(self, name: str) -> str:
+        """Convert to Title Case (e.g., 'new_connection' -> 'New Connection', 'fullscreen' -> 'Fullscreen')."""
+        if "_" in name:
+            return " ".join(word.capitalize() for word in name.split("_"))
+        # Capitalize first letter even for single words
+        return name[0].upper() + name[1:] if name else name
+
+    def _migrate_shortcut(self, shortcut: str) -> str:
+        """Migrate old keybinding values to new ones (e.g., Ctrl+K -> Ctrl+Shift+K)."""
+        migration_map = {
+            "Ctrl+K": "Ctrl+Shift+K",      # Command Palette
+            "Ctrl+W": "Ctrl+Shift+W",      # Close Tab
+        }
+        return migration_map.get(shortcut, shortcut)
 
     def _reset_defaults(self) -> None:
         self._config.set("keybindings", {})

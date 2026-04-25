@@ -389,7 +389,7 @@ def main() -> None:
         window.top_bar.set_tunnel_count
     )
 
-    # Command Palette (Ctrl+K)
+    # Command Palette (Ctrl+Shift+K)
     palette = CommandPalette(window)
 
     # Auto-update manager
@@ -470,15 +470,15 @@ def main() -> None:
 
     from PySide6.QtGui import QKeySequence, QShortcut
 
-    shortcut_palette = QShortcut(QKeySequence("Ctrl+K"), window)
+    shortcut_palette = QShortcut(QKeySequence("Ctrl+Shift+K"), window)
     shortcut_palette.activated.connect(_show_palette)
 
     # Settings shortcut (Ctrl+,)
     shortcut_settings = QShortcut(QKeySequence("Ctrl+,"), window)
     shortcut_settings.activated.connect(_open_settings)
 
-    # Keyboard shortcuts: Ctrl+W close tab, Ctrl+Tab/Ctrl+Shift+Tab switch tabs
-    sc_close_tab = QShortcut(QKeySequence("Ctrl+W"), window)
+    # Keyboard shortcuts: Ctrl+Shift+W close tab, Ctrl+Tab/Ctrl+Shift+Tab switch tabs
+    sc_close_tab = QShortcut(QKeySequence("Ctrl+Shift+W"), window)
     sc_close_tab.activated.connect(connections_page.close_current_tab)
 
     sc_next_tab = QShortcut(QKeySequence("Ctrl+Tab"), window)

@@ -64,10 +64,11 @@ class TerminalSettings(QWidget):
 
         # Cursor style
         self._cursor_style = QComboBox()
-        self._cursor_style.addItems(["block", "underline", "bar"])
-        self._cursor_style.setCurrentText(config.get("terminal.cursor_style", "block"))
+        self._cursor_style.addItems(["Block", "Underline", "Bar"])
+        style = config.get("terminal.cursor_style", "block")
+        self._cursor_style.setCurrentText(style.capitalize())
         self._cursor_style.currentTextChanged.connect(
-            lambda v: self._save("terminal.cursor_style", v)
+            lambda v: self._save("terminal.cursor_style", v.lower())
         )
         form.addRow(self._make_label("Cursor Style"), self._cursor_style)
 

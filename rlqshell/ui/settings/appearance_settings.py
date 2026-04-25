@@ -55,10 +55,11 @@ class AppearanceSettings(QWidget):
 
         # Theme — "auto" follows the OS color scheme
         self._theme = QComboBox()
-        self._theme.addItems(["auto", "dark", "light"])
-        self._theme.setCurrentText(config.get("appearance.theme", "auto"))
+        self._theme.addItems(["Auto", "Dark", "Light"])
+        theme = config.get("appearance.theme", "auto")
+        self._theme.setCurrentText(theme.capitalize())
         self._theme.currentTextChanged.connect(
-            lambda v: self._save("appearance.theme", v)
+            lambda v: self._save("appearance.theme", v.lower())
         )
         form.addRow(self._make_label("Theme"), self._theme)
 

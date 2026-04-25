@@ -93,6 +93,25 @@ _APP_CURSOR_MAP: dict[int, bytes] = {
     Qt.Key.Key_End: b"\x1bOF",
 }
 
+# Modifier-qualified key sequences (XTerm format: \x1b[1;{mod}X)
+# mod=2: Shift, mod=3: Alt, mod=5: Ctrl, mod=6: Shift+Ctrl
+_MODIFIER_KEY_MAP: dict[tuple[int, int], bytes] = {
+    (Qt.Key.Key_Right, Qt.KeyboardModifier.ControlModifier): b"\x1b[1;5C",
+    (Qt.Key.Key_Left, Qt.KeyboardModifier.ControlModifier): b"\x1b[1;5D",
+    (Qt.Key.Key_Up, Qt.KeyboardModifier.ControlModifier): b"\x1b[1;5A",
+    (Qt.Key.Key_Down, Qt.KeyboardModifier.ControlModifier): b"\x1b[1;5B",
+    # Shift+Arrow sequences (for DECCKM-aware apps like vim)
+    (Qt.Key.Key_Right, Qt.KeyboardModifier.ShiftModifier): b"\x1b[1;2C",
+    (Qt.Key.Key_Left, Qt.KeyboardModifier.ShiftModifier): b"\x1b[1;2D",
+    (Qt.Key.Key_Up, Qt.KeyboardModifier.ShiftModifier): b"\x1b[1;2A",
+    (Qt.Key.Key_Down, Qt.KeyboardModifier.ShiftModifier): b"\x1b[1;2B",
+    # Alt+Arrow sequences (for word jumping in readline)
+    (Qt.Key.Key_Right, Qt.KeyboardModifier.AltModifier): b"\x1b[1;3C",
+    (Qt.Key.Key_Left, Qt.KeyboardModifier.AltModifier): b"\x1b[1;3D",
+    (Qt.Key.Key_Up, Qt.KeyboardModifier.AltModifier): b"\x1b[1;3A",
+    (Qt.Key.Key_Down, Qt.KeyboardModifier.AltModifier): b"\x1b[1;3B",
+}
+
 _MIN_FONT_SIZE = 8
 _MAX_FONT_SIZE = 32
 
@@ -169,6 +188,8 @@ class TerminalWidget(QWidget):
         self._selecting = False
         self._sel_start: tuple[int, int] | None = None  # (col, row)
         self._sel_end: tuple[int, int] | None = None
+        self._kb_sel_anchor: tuple[int, int] | None = None  # keyboard selection anchor
+        self._kb_sel_cursor: tuple[int, int] | None = None  # keyboard selection moving end
 
         # Click tracking for triple-click line selection
         self._click_count = 0
@@ -543,6 +564,76 @@ class TerminalWidget(QWidget):
         modifiers = event.modifiers()
         key = event.key()
 
+        # Let app-level shortcuts pass through (don't consume these events)
+        if (modifiers & Qt.KeyboardModifier.ControlModifier) and (modifiers & Qt.KeyboardModifier.ShiftModifier):
+            # Ctrl+Shift+K = Command Palette (app-level)
+            if key == Qt.Key.Key_K:
+                super().keyPressEvent(event)
+                return
+            # Ctrl+Shift+W = Close Tab (app-level)
+            if key == Qt.Key.Key_W:
+                super().keyPressEvent(event)
+                return
+
+        # Alt+key handling (Alt+letter, Alt+arrow, etc.)
+        if modifiers == Qt.KeyboardModifier.AltModifier:
+            # Check for Alt+Arrow in modifier map first
+            seq = _MODIFIER_KEY_MAP.get((key, Qt.KeyboardModifier.AltModifier))
+            if seq:
+                self.input_ready.emit(seq)
+                self._kb_sel_anchor = None
+                self._kb_sel_cursor = None
+                return
+            # Alt+letter/digit/printable → send escape prefix
+            text = event.text()
+            if text:
+                self.input_ready.emit(b'\x1b' + text.encode('utf-8'))
+                self._kb_sel_anchor = None
+                self._kb_sel_cursor = None
+                return
+
+        # Shift+Arrow -> send to remote if DECCKM active (vim/mc), else local selection
+        if modifiers == Qt.KeyboardModifier.ShiftModifier:
+            if key in (Qt.Key.Key_Right, Qt.Key.Key_Left, Qt.Key.Key_Up, Qt.Key.Key_Down):
+                if _DECCKM in self._screen.mode:
+                    # DECCKM active: vim/mc — send escape sequence to remote
+                    seq = _MODIFIER_KEY_MAP.get((key, Qt.KeyboardModifier.ShiftModifier))
+                    if seq:
+                        self.input_ready.emit(seq)
+                    return
+                else:
+                    # DECCKM inactive: bash — local selection
+                    if key == Qt.Key.Key_Right:
+                        self._extend_selection_kb(1, 0)
+                    elif key == Qt.Key.Key_Left:
+                        self._extend_selection_kb(-1, 0)
+                    elif key == Qt.Key.Key_Up:
+                        self._extend_selection_kb(0, -1)
+                    elif key == Qt.Key.Key_Down:
+                        self._extend_selection_kb(0, 1)
+                    return
+            # Shift+PgUp/PgDn -> scroll scrollback buffer
+            if key == Qt.Key.Key_PageUp:
+                self._scroll_by_keyboard(self._rows)
+                return
+            if key == Qt.Key.Key_PageDown:
+                self._scroll_by_keyboard(-self._rows)
+                return
+
+        # Ctrl+Backspace -> delete previous word
+        if key == Qt.Key.Key_Backspace and modifiers & Qt.KeyboardModifier.ControlModifier:
+            self.input_ready.emit(b'\x1b\x7f')
+            self._kb_sel_anchor = None
+            self._kb_sel_cursor = None
+            return
+
+        # Ctrl+Space -> NUL (used by vim for markers)
+        if key == Qt.Key.Key_Space and modifiers & Qt.KeyboardModifier.ControlModifier:
+            self.input_ready.emit(b'\x00')
+            self._kb_sel_anchor = None
+            self._kb_sel_cursor = None
+            return
+
         # Ctrl+Shift++ / Ctrl+Shift+- -> terminal font zoom
         if (
             modifiers & Qt.KeyboardModifier.ControlModifier
@@ -553,6 +644,13 @@ class TerminalWidget(QWidget):
                 return
             if key in (Qt.Key.Key_Minus, Qt.Key.Key_Underscore):
                 self._adjust_font_size(-1)
+                return
+            # Ctrl+Shift+Home/End -> scroll to extremes
+            if key == Qt.Key.Key_Home:
+                self._scroll_to_extreme(top=True)
+                return
+            if key == Qt.Key.Key_End:
+                self._scroll_to_extreme(top=False)
                 return
 
         # Ctrl+Shift+C -> copy
@@ -579,6 +677,14 @@ class TerminalWidget(QWidget):
             self._select_all()
             return
 
+        # Check for modifier-qualified keys (Ctrl+Arrow, etc.)
+        seq = _MODIFIER_KEY_MAP.get((key, modifiers))
+        if seq:
+            self.input_ready.emit(seq)
+            self._kb_sel_anchor = None
+            self._kb_sel_cursor = None
+            return
+
         # Mapped keys (application cursor mode overrides when DECCKM is active)
         if _DECCKM in self._screen.mode:
             seq = _APP_CURSOR_MAP.get(key) or _KEY_MAP.get(key)
@@ -586,24 +692,33 @@ class TerminalWidget(QWidget):
             seq = _KEY_MAP.get(key)
         if seq:
             self.input_ready.emit(seq)
+            self._kb_sel_anchor = None
+            self._kb_sel_cursor = None
             return
 
         # Ctrl+letter (A-Z) → control character
         if modifiers & Qt.KeyboardModifier.ControlModifier and Qt.Key.Key_A <= key <= Qt.Key.Key_Z:
             code = key - Qt.Key.Key_A + 1
             self.input_ready.emit(bytes([code]))
+            self._kb_sel_anchor = None
+            self._kb_sel_cursor = None
             return
 
         # Regular text input
         text = event.text()
         if text:
             self.input_ready.emit(text.encode("utf-8"))
+            self._kb_sel_anchor = None
+            self._kb_sel_cursor = None
 
     # --- Mouse (selection + scroll) ---
 
     def mousePressEvent(self, event) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
             col, row = self._pos_to_cell(event.position())
+            # Clear keyboard selection state when mouse selection starts
+            self._kb_sel_anchor = None
+            self._kb_sel_cursor = None
 
             # Shift+click extends selection from existing anchor
             if event.modifiers() & Qt.KeyboardModifier.ShiftModifier and self._sel_start is not None:
@@ -1019,6 +1134,67 @@ class TerminalWidget(QWidget):
             for _ in text.replace("\n", ""):
                 self.input_ready.emit(b"\x08")
 
+    def _extend_selection_kb(self, dc: int, dr: int) -> None:
+        """Extend or start keyboard-driven selection by (dc, dr) cells."""
+        # Auto-scroll to bottom for consistent cursor reference
+        if self._scroll_offset != 0:
+            self._scroll_offset = 0
+            self._sync_scrollbar_from_offset()
+
+        cursor = (self._screen.cursor.x, self._screen.cursor.y)
+
+        if self._kb_sel_anchor is None:
+            # First Shift+Arrow: anchor at current cursor position
+            self._kb_sel_anchor = cursor
+            self._kb_sel_cursor = cursor
+
+        ac, ar = self._kb_sel_cursor
+        nc = ac + dc
+        nr = ar + dr
+
+        # Wrap at line boundaries and clamp rows
+        if nc < 0:
+            nc = self._cols - 1
+            nr = max(0, nr - 1)
+        elif nc >= self._cols:
+            nc = 0
+            nr = min(self._rows - 1, nr + 1)
+        else:
+            nr = max(0, min(nr, self._rows - 1))
+
+        self._kb_sel_cursor = (nc, nr)
+        self._sel_start = self._kb_sel_anchor
+        self._sel_end = self._kb_sel_cursor
+        self.update()
+
+    def _scroll_by_keyboard(self, delta: int) -> None:
+        """Scroll scrollback buffer by delta lines (via keyboard)."""
+        max_offset = self._max_scroll_offset()
+        if max_offset <= 0:
+            return
+        # Clear keyboard selection when scrolling
+        self._kb_sel_anchor = None
+        self._kb_sel_cursor = None
+        old_offset = self._scroll_offset
+        self._scroll_offset = max(0, min(self._scroll_offset + delta, max_offset))
+        self._shift_selection(self._scroll_offset - old_offset)
+        self._sync_scrollbar_from_offset()
+        self.update()
+
+    def _scroll_to_extreme(self, top: bool) -> None:
+        """Scroll to top or bottom of scrollback buffer."""
+        # Clear keyboard selection when scrolling to extreme
+        self._kb_sel_anchor = None
+        self._kb_sel_cursor = None
+        old_offset = self._scroll_offset
+        if top:
+            self._scroll_offset = self._max_scroll_offset()
+        else:
+            self._scroll_offset = 0
+        self._shift_selection(self._scroll_offset - old_offset)
+        self._sync_scrollbar_from_offset()
+        self.update()
+
     def _select_all(self) -> None:
         """Select all visible lines."""
         self._sel_start = (0, 0)
@@ -1031,6 +1207,8 @@ class TerminalWidget(QWidget):
         if hasattr(self._screen.history, "bottom"):
             self._screen.history.bottom.clear()
         self._scroll_offset = 0
+        self._kb_sel_anchor = None
+        self._kb_sel_cursor = None
         self._sync_scrollbar_from_offset()
         self.update()
 
@@ -1040,6 +1218,8 @@ class TerminalWidget(QWidget):
         self._scroll_offset = 0
         self._sel_start = None
         self._sel_end = None
+        self._kb_sel_anchor = None
+        self._kb_sel_cursor = None
         self._sync_scrollbar_from_offset()
         self.update()
 

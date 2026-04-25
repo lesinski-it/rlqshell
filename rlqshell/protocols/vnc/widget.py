@@ -54,6 +54,7 @@ _QT_TO_KEYSYM: dict[int, int] = {
     Qt.Key.Key_Shift: 0xFFE1,
     Qt.Key.Key_Control: 0xFFE3,
     Qt.Key.Key_Alt: 0xFFE9,
+    Qt.Key.Key_AltGr: 0xFFEA,
     Qt.Key.Key_Meta: 0xFFEB,
     Qt.Key.Key_CapsLock: 0xFFE5,
     Qt.Key.Key_NumLock: 0xFF7F,
@@ -266,6 +267,11 @@ class VNCWidget(QWidget):
         text = event.text()
         if text and ord(text[0]) >= 0x20:
             return ord(text[0])
+        # Handle Ctrl+letter combinations (e.g., Ctrl+A → send 'A', not control char)
+        modifiers = event.modifiers()
+        if (modifiers & Qt.KeyboardModifier.ControlModifier) and (Qt.Key.Key_A <= key <= Qt.Key.Key_Z):
+            # Send the letter itself, not the control character
+            return ord(chr(key - Qt.Key.Key_A + ord('A')))
         return None
 
     # ------------------------------------------------------------------
