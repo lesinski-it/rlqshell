@@ -108,14 +108,29 @@ try {
     Write-Host "==> Done: $files files, $totalMb MB in $TargetDir" -ForegroundColor Green
 
     # Quick smoke test -- make sure the binary even runs.
-    # Don't redirect stderr; FreeRDP writes deprecation warnings there and
-    # PowerShell's 2>&1 turns each stderr line into an ErrorRecord, which
-    # would set $LASTEXITCODE != 0 even on a clean run.
+    # Use Start-Process with file redirection: invoking native EXEs with
+    # `2>$null` or `2>&1` in Windows PowerShell 5.1 wraps every stderr
+    # line as an ErrorRecord (NativeCommandError), which combined with
+    # $ErrorActionPreference='Stop' aborts the script even on exit code 0.
+    # FreeRDP 3.21 writes deprecation warnings about wfreerdp to stderr,
+    # so we have to dodge that here.
     Write-Host ""
     Write-Host "==> Verifying binary" -ForegroundColor Cyan
-    $verLine = & $Marker /version 2>$null | Select-String 'FreeRDP version' | Select-Object -First 1
-    if ($verLine) { Write-Host "    $verLine" -ForegroundColor Green }
-    else { Write-Host "    (could not parse version output)" -ForegroundColor Yellow }
+    $tmpOut = [System.IO.Path]::GetTempFileName()
+    $tmpErr = [System.IO.Path]::GetTempFileName()
+    try {
+        Start-Process -FilePath $Marker -ArgumentList '/version' `
+            -NoNewWindow -Wait `
+            -RedirectStandardOutput $tmpOut `
+            -RedirectStandardError $tmpErr | Out-Null
+        $verLine = Get-Content $tmpOut |
+            Where-Object { $_ -match 'FreeRDP version' } |
+            Select-Object -First 1
+        if ($verLine) { Write-Host "    $($verLine.Trim())" -ForegroundColor Green }
+        else { Write-Host "    (could not parse version output)" -ForegroundColor Yellow }
+    } finally {
+        Remove-Item $tmpOut, $tmpErr -ErrorAction SilentlyContinue
+    }
 }
 finally {
     if (Test-Path $TempDir) {
