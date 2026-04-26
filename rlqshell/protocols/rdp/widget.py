@@ -8,15 +8,60 @@ overlay (connecting / error) on top.
 
 from __future__ import annotations
 
+import ctypes
 import logging
+import sys
 
-from PySide6.QtCore import QRectF, QSize, Qt, Signal
+from PySide6.QtCore import QRectF, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFont, QFontMetricsF, QPainter, QPaintEvent
 from PySide6.QtWidgets import QPushButton, QSizePolicy, QWidget
 
 from rlqshell.protocols.rdp.connection import RDPConnection
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Win32 helpers for managing the embedded FreeRDP child window
+# ---------------------------------------------------------------------------
+
+if sys.platform == "win32":
+    _user32 = ctypes.windll.user32
+    _GW_CHILD = 5
+    _SWP_NOMOVE = 0x0002
+    _SWP_NOZORDER = 0x0004
+    _SWP_NOACTIVATE = 0x0010
+    _SWP_SHOWWINDOW = 0x0040
+
+    def _find_child_hwnd(parent_hwnd: int) -> int | None:
+        """Return the first child window of the given parent, if any."""
+        try:
+            child = _user32.GetWindow(parent_hwnd, _GW_CHILD)
+            return int(child) if child else None
+        except Exception:
+            return None
+
+    def _resize_child(hwnd: int, width: int, height: int) -> None:
+        """Resize a child window to (width, height) at (0, 0) relative to parent."""
+        _user32.SetWindowPos(
+            hwnd, 0, 0, 0, max(1, width), max(1, height),
+            _SWP_NOZORDER | _SWP_NOACTIVATE | _SWP_SHOWWINDOW,
+        )
+
+    def _focus_window(hwnd: int) -> None:
+        try:
+            _user32.SetFocus(hwnd)
+        except Exception:
+            pass
+else:  # non-Windows fallbacks (Linux/macOS handled separately later)
+    def _find_child_hwnd(parent_hwnd: int) -> int | None:  # noqa: ARG001
+        return None
+
+    def _resize_child(hwnd: int, width: int, height: int) -> None:  # noqa: ARG001
+        pass
+
+    def _focus_window(hwnd: int) -> None:  # noqa: ARG001
+        pass
 
 
 class RDPWidget(QWidget):
@@ -49,6 +94,14 @@ class RDPWidget(QWidget):
         self._bg_color = QColor("#1e1e2e")
         self._reconnect_btn: QPushButton | None = None
 
+        # Embedded FreeRDP child window state. xfreerdp creates its own native
+        # window, reparents it to our HWND via /parent-window, then we manage
+        # its size and focus from here so it tracks the Qt widget.
+        self._child_hwnd: int | None = None
+        self._child_finder = QTimer(self)
+        self._child_finder.setInterval(150)
+        self._child_finder.timeout.connect(self._poll_for_child)
+
         if connection is not None:
             self.set_connection(connection)
 
@@ -63,6 +116,11 @@ class RDPWidget(QWidget):
         # the widget hasn't been shown yet; we re-sync in showEvent for the
         # case where Qt assigned a different window after first realization.
         self._sync_parent_window()
+        # Reconnect tears down the old xfreerdp process; the child HWND is
+        # now stale and a new one will appear once the new process spawns.
+        self._child_hwnd = None
+        if sys.platform == "win32":
+            self._child_finder.start()
 
     def _sync_parent_window(self) -> None:
         if self._conn is None:
@@ -80,6 +138,56 @@ class RDPWidget(QWidget):
         # value at __init__ time can become stale once the widget joins a
         # layout/stack.
         self._sync_parent_window()
+
+    # ------------------------------------------------------------------
+    # Embedded child window management (Win32 only for now)
+    # ------------------------------------------------------------------
+
+    def _poll_for_child(self) -> None:
+        """Look for the FreeRDP child window xfreerdp creates after spawn."""
+        if self._child_hwnd is not None:
+            self._child_finder.stop()
+            return
+        try:
+            parent = int(self.winId())
+        except Exception:
+            return
+        child = _find_child_hwnd(parent)
+        if child:
+            self._child_hwnd = child
+            self._child_finder.stop()
+            logger.info("RDP child HWND captured: %s", child)
+            self._resize_child_to_widget()
+            _focus_window(child)
+
+    def _resize_child_to_widget(self) -> None:
+        if self._child_hwnd is None:
+            return
+        # Use device-independent pixels via Qt's logicalDpi / devicePixelRatio?
+        # SetWindowPos expects raw pixels — Qt's width()/height() already
+        # return device-independent units that match the parent HWND's client
+        # area on Windows so the raw values are correct here.
+        _resize_child(self._child_hwnd, self.width(), self.height())
+
+    def resizeEvent(self, event) -> None:  # noqa: N802 -- Qt API
+        super().resizeEvent(event)
+        if self._reconnect_btn is not None and self._reconnect_btn.isVisible():
+            self._position_reconnect_btn()
+        self._resize_child_to_widget()
+
+    def focusInEvent(self, event) -> None:  # noqa: N802 -- Qt API
+        super().focusInEvent(event)
+        if self._child_hwnd is not None:
+            _focus_window(self._child_hwnd)
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802 -- Qt API
+        super().mousePressEvent(event)
+        # Clicks on the embedded RDP area normally route directly to the
+        # child window, but if the user clicks on the surrounding overlay
+        # (e.g. the dark background frame around the framebuffer) we still
+        # want keyboard focus to land on the RDP session afterwards.
+        if self._child_hwnd is not None:
+            _focus_window(self._child_hwnd)
 
     # ------------------------------------------------------------------
     # Overlay (status / error messages)
@@ -138,11 +246,6 @@ class RDPWidget(QWidget):
         bx = int((self.width() - bw) / 2)
         by = min(int(overlay_bottom + 14), max(0, self.height() - bh - 8))
         btn.move(bx, by)
-
-    def resizeEvent(self, event) -> None:
-        super().resizeEvent(event)
-        if self._reconnect_btn is not None and self._reconnect_btn.isVisible():
-            self._position_reconnect_btn()
 
     # ------------------------------------------------------------------
     # Painting (only the overlay — FreeRDP draws the remote desktop itself)
