@@ -54,16 +54,46 @@ def _friendly_error(text: str) -> str:
 
 
 def _find_freerdp_binary() -> str | None:
-    """Locate the FreeRDP executable on the current platform."""
-    candidates = (
-        ["wfreerdp", "wfreerdp.exe", "xfreerdp", "xfreerdp3"]
+    """Locate the FreeRDP executable.
+
+    Search order:
+      1. Bundled next to our executable (MSI install layout: ``freerdp/wfreerdp.exe``)
+      2. PyInstaller onefile extraction dir (``sys._MEIPASS/freerdp/...``)
+      3. Source-tree dev location (``installer/freerdp/...``)
+      4. PATH lookup
+      5. Common Windows install locations
+    """
+    names = (
+        ["wfreerdp.exe", "xfreerdp.exe", "xfreerdp3.exe", "sdl-freerdp.exe"]
         if sys.platform == "win32"
-        else ["xfreerdp3", "xfreerdp"]
+        else ["xfreerdp3", "xfreerdp", "sdl-freerdp"]
     )
-    for name in candidates:
+
+    bundled_roots: list[Path] = []
+    # 1. Next to RLQShell.exe (frozen MSI install)
+    bundled_roots.append(Path(sys.executable).resolve().parent / "freerdp")
+    # 2. PyInstaller onefile extraction
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        bundled_roots.append(Path(meipass) / "freerdp")
+    # 3. Dev mode -- installer/freerdp/ at repo root
+    bundled_roots.append(
+        Path(__file__).resolve().parents[3] / "installer" / "freerdp",
+    )
+
+    for root in bundled_roots:
+        for name in names:
+            candidate = root / name
+            if candidate.exists():
+                return str(candidate)
+
+    # 4. PATH
+    for name in names:
         found = shutil.which(name)
         if found:
             return found
+
+    # 5. Common Windows locations
     if sys.platform == "win32":
         for path in (
             Path(r"C:\Program Files\FreeRDP\wfreerdp.exe"),

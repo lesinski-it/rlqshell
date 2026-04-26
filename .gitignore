@@ -52,3 +52,6 @@ CLAUDE.md
 # Internal docs — not published to public GitHub
 docs/rlqshell-spec.md
 docs/build-linux-deb.md
+
+# Bundled FreeRDP binaries — fetched at build time by installer/fetch-freerdp.ps1
+installer/freerdp/

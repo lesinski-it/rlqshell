@@ -91,6 +91,19 @@ if (-not (Test-Path $SourceExe)) {
 }
 Invoke-Sign $SourceExe
 
+# --- Stage FreeRDP -----------------------------------------------------------
+# fetch-freerdp.ps1 is idempotent: returns immediately if installer/freerdp/
+# already has wfreerdp.exe. CI / first-build users get an automatic download.
+$FetchFreeRdpScript = Join-Path $ScriptDir 'fetch-freerdp.ps1'
+$FreeRDPDir         = Join-Path $ScriptDir 'freerdp'
+if (Test-Path $FetchFreeRdpScript) {
+    & $FetchFreeRdpScript
+    if ($LASTEXITCODE -ne 0) { throw "fetch-freerdp.ps1 failed" }
+}
+if (-not (Test-Path (Join-Path $FreeRDPDir 'wfreerdp.exe'))) {
+    throw "Missing FreeRDP binaries in $FreeRDPDir (run installer/fetch-freerdp.ps1)"
+}
+
 # --- Paths for WiX variables -------------------------------------------------
 $IconFile   = Join-Path $RepoRoot 'rlqshell\resources\images\app_icon.ico'
 $LicenseRtf = Join-Path $ScriptDir 'License.rtf'
@@ -113,6 +126,7 @@ wix build `
     -d "SourceExe=$SourceExe" `
     -d "IconFile=$IconFile" `
     -d "LicenseRtf=$LicenseRtf" `
+    -d "FreeRDPDir=$FreeRDPDir" `
     -out $OutputMsi `
     $WxsFile
 

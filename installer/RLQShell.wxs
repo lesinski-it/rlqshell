@@ -82,7 +82,9 @@
         Windows with an x64 package both resolve to C:\Program Files.
     -->
     <StandardDirectory Id="ProgramFilesFolder">
-      <Directory Id="APPLICATIONFOLDER" Name="RLQShell" />
+      <Directory Id="APPLICATIONFOLDER" Name="RLQShell">
+        <Directory Id="FreeRDPFolder" Name="freerdp" />
+      </Directory>
     </StandardDirectory>
 
     <StandardDirectory Id="ProgramMenuFolder">
@@ -107,6 +109,16 @@
             Source="$(var.SourceExe)"
             KeyPath="yes" />
     </Component>
+
+    <!--
+        FreeRDP — bundled so smart card / drive / printer redirection works
+        out of the box without a separate install. Files are staged into
+        installer/freerdp/ by installer/fetch-freerdp.ps1; the build script
+        passes the absolute path via -d FreeRDPDir=...
+    -->
+    <ComponentGroup Id="FreeRDPFiles" Directory="FreeRDPFolder">
+      <Files Include="$(var.FreeRDPDir)\**" />
+    </ComponentGroup>
 
     <Component Id="StartMenuShortcut"
                Directory="ApplicationProgramsFolder"
@@ -178,6 +190,7 @@
              AllowAbsent="no"
              ConfigurableDirectory="APPLICATIONFOLDER">
       <ComponentRef Id="MainExecutable" />
+      <ComponentGroupRef Id="FreeRDPFiles" />
       <ComponentRef Id="PerMachineMarker" />
 
       <Feature Id="StartMenuShortcutFeature"
