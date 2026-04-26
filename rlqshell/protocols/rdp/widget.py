@@ -10,9 +10,9 @@ from __future__ import annotations
 
 import logging
 
-from PySide6.QtCore import QRectF, Qt, Signal
+from PySide6.QtCore import QRectF, QSize, Qt, Signal
 from PySide6.QtGui import QColor, QFont, QFontMetricsF, QPainter, QPaintEvent
-from PySide6.QtWidgets import QPushButton, QWidget
+from PySide6.QtWidgets import QPushButton, QSizePolicy, QWidget
 
 from rlqshell.protocols.rdp.connection import RDPConnection
 
@@ -37,6 +37,11 @@ class RDPWidget(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_DontCreateNativeAncestors)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setMouseTracking(True)
+        # Without our own paintEvent supplying content, the layout has nothing
+        # to size against — claim the whole stretch so the embedded FreeRDP
+        # window is not reduced to a thin strip.
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.setMinimumSize(640, 480)
 
         self._conn: RDPConnection | None = None
         self._overlay_text: str | None = None
@@ -47,13 +52,34 @@ class RDPWidget(QWidget):
         if connection is not None:
             self.set_connection(connection)
 
+    def sizeHint(self) -> QSize:  # noqa: N802 -- Qt API
+        return QSize(1280, 720)
+
     def set_connection(self, conn: RDPConnection) -> None:
         """Attach a connection and forward our window handle for embedding."""
         self._conn = conn
+        # winId() only returns a meaningful HWND once the widget has been
+        # realized. WA_NativeWindow lets us force creation right now even if
+        # the widget hasn't been shown yet; we re-sync in showEvent for the
+        # case where Qt assigned a different window after first realization.
+        self._sync_parent_window()
+
+    def _sync_parent_window(self) -> None:
+        if self._conn is None:
+            return
         try:
-            conn.set_parent_window(int(self.winId()))
+            wid = int(self.winId())
+            self._conn.set_parent_window(wid)
+            logger.debug("RDP parent window HWND = %s", wid)
         except Exception:
             logger.exception("Could not pass parent window handle to RDPConnection")
+
+    def showEvent(self, event) -> None:  # noqa: N802 -- Qt API
+        super().showEvent(event)
+        # Re-grab winId now that the widget tree is fully realized; the
+        # value at __init__ time can become stale once the widget joins a
+        # layout/stack.
+        self._sync_parent_window()
 
     # ------------------------------------------------------------------
     # Overlay (status / error messages)

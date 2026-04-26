@@ -214,9 +214,16 @@ class RDPConnection(AbstractConnection):
         proc.finished.connect(self._on_proc_finished)
 
         logger.info(
-            "Spawning FreeRDP: %s (smartcard=%s drives=%s printers=%s)",
+            "Spawning FreeRDP: %s (smartcard=%s drives=%s printers=%s parent_winid=%s)",
             binary, self._smartcard, self._drives_enabled, self._printers,
+            self._parent_winid,
         )
+        if not self._parent_winid:
+            logger.warning(
+                "No parent_winid set -- FreeRDP will open in a separate window "
+                "instead of embedding into the Qt widget. RDPWidget should call "
+                "set_parent_window() before connect().",
+            )
         proc.start()
         if not proc.waitForStarted(5000):
             raise ConnectionError(f"Could not start FreeRDP: {proc.errorString()}")
@@ -236,6 +243,12 @@ class RDPConnection(AbstractConnection):
             "/cert:ignore",
             "/sec:nla,tls,rdp",
             "/dynamic-resolution",
+            # Without smart-sizing the rendered framebuffer is fixed at /size:
+            # and the embedded child window simply clips it, so a 1920x1080
+            # remote desktop ends up showing only its top-left corner inside
+            # our Qt widget. /smart-sizing scales the bitmap to the embedded
+            # window dimensions instead.
+            "/smart-sizing",
         ]
         if self._domain:
             args.append(f"/d:{self._domain}")
