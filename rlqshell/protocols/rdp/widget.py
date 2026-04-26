@@ -27,32 +27,100 @@ logger = logging.getLogger(__name__)
 
 if sys.platform == "win32":
     _user32 = ctypes.windll.user32
-    _GW_CHILD = 5
+    _kernel32 = ctypes.windll.kernel32
     _SWP_NOMOVE = 0x0002
     _SWP_NOZORDER = 0x0004
     _SWP_NOACTIVATE = 0x0010
     _SWP_SHOWWINDOW = 0x0040
+    _SWP_FRAMECHANGED = 0x0020
+
+    # EnumChildWindows callback signature
+    _EnumChildProc = ctypes.WINFUNCTYPE(
+        ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p,
+    )
+
+    # Argument types -- without these, ctypes may marshal HWND (a 64-bit
+    # pointer) as 32-bit on x64 Python and silently truncate the handle.
+    _user32.EnumChildWindows.argtypes = [
+        ctypes.c_void_p, _EnumChildProc, ctypes.c_void_p,
+    ]
+    _user32.EnumChildWindows.restype = ctypes.c_bool
+    _user32.SetWindowPos.argtypes = [
+        ctypes.c_void_p, ctypes.c_void_p,
+        ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_uint,
+    ]
+    _user32.SetWindowPos.restype = ctypes.c_bool
+    _user32.SetFocus.argtypes = [ctypes.c_void_p]
+    _user32.SetFocus.restype = ctypes.c_void_p
+    _user32.GetWindowThreadProcessId.argtypes = [
+        ctypes.c_void_p, ctypes.POINTER(ctypes.c_ulong),
+    ]
+    _user32.GetWindowThreadProcessId.restype = ctypes.c_ulong
+    _user32.AttachThreadInput.argtypes = [
+        ctypes.c_ulong, ctypes.c_ulong, ctypes.c_bool,
+    ]
+    _user32.AttachThreadInput.restype = ctypes.c_bool
+    _kernel32.GetCurrentThreadId.restype = ctypes.c_ulong
 
     def _find_child_hwnd(parent_hwnd: int) -> int | None:
-        """Return the first child window of the given parent, if any."""
+        """Find the embedded FreeRDP window inside the given parent.
+
+        EnumChildWindows walks the entire descendant tree and returns
+        every native window regardless of style (WS_CHILD or WS_POPUP
+        reparented via SetParent). GetWindow(GW_CHILD) misses the
+        latter, which is how some FreeRDP builds create their window.
+        """
+        if not parent_hwnd:
+            return None
+        found: list[int] = []
+
+        def _cb(hwnd, _lparam):
+            found.append(int(hwnd))
+            return True  # continue enumeration to grab all descendants
+
         try:
-            child = _user32.GetWindow(parent_hwnd, _GW_CHILD)
-            return int(child) if child else None
+            _user32.EnumChildWindows(parent_hwnd, _EnumChildProc(_cb), None)
         except Exception:
             return None
+        # Return the deepest/last enumerated window, which in practice is
+        # the actual rendering surface FreeRDP creates inside its top
+        # container.
+        return found[-1] if found else None
 
     def _resize_child(hwnd: int, width: int, height: int) -> None:
         """Resize a child window to (width, height) at (0, 0) relative to parent."""
         _user32.SetWindowPos(
-            hwnd, 0, 0, 0, max(1, width), max(1, height),
-            _SWP_NOZORDER | _SWP_NOACTIVATE | _SWP_SHOWWINDOW,
+            hwnd, None, 0, 0, max(1, width), max(1, height),
+            _SWP_NOZORDER | _SWP_NOACTIVATE | _SWP_SHOWWINDOW | _SWP_FRAMECHANGED,
         )
 
     def _focus_window(hwnd: int) -> None:
+        """Move keyboard focus to the given HWND.
+
+        SetFocus is silently ignored when the target window belongs to
+        another thread (which is always our case -- xfreerdp runs in a
+        separate process, hence different thread). Attach the input
+        queues for the duration of the call so SetFocus actually lands.
+        """
+        if not hwnd:
+            return
         try:
-            _user32.SetFocus(hwnd)
+            target_thread = _user32.GetWindowThreadProcessId(hwnd, None)
+            current_thread = _kernel32.GetCurrentThreadId()
+            attached = False
+            if target_thread and target_thread != current_thread:
+                attached = bool(_user32.AttachThreadInput(
+                    current_thread, target_thread, True,
+                ))
+            try:
+                _user32.SetFocus(hwnd)
+            finally:
+                if attached:
+                    _user32.AttachThreadInput(
+                        current_thread, target_thread, False,
+                    )
         except Exception:
-            pass
+            logger.debug("SetFocus failed for HWND %s", hwnd, exc_info=True)
 else:  # non-Windows fallbacks (Linux/macOS handled separately later)
     def _find_child_hwnd(parent_hwnd: int) -> int | None:  # noqa: ARG001
         return None
@@ -98,6 +166,7 @@ class RDPWidget(QWidget):
         # window, reparents it to our HWND via /parent-window, then we manage
         # its size and focus from here so it tracks the Qt widget.
         self._child_hwnd: int | None = None
+        self._child_poll_attempts = 0
         self._child_finder = QTimer(self)
         self._child_finder.setInterval(150)
         self._child_finder.timeout.connect(self._poll_for_child)
@@ -119,8 +188,10 @@ class RDPWidget(QWidget):
         # Reconnect tears down the old xfreerdp process; the child HWND is
         # now stale and a new one will appear once the new process spawns.
         self._child_hwnd = None
+        self._child_poll_attempts = 0
         if sys.platform == "win32":
             self._child_finder.start()
+            logger.info("RDPWidget: child window poller started")
 
     def _sync_parent_window(self) -> None:
         if self._conn is None:
@@ -148,6 +219,7 @@ class RDPWidget(QWidget):
         if self._child_hwnd is not None:
             self._child_finder.stop()
             return
+        self._child_poll_attempts += 1
         try:
             parent = int(self.winId())
         except Exception:
@@ -156,9 +228,27 @@ class RDPWidget(QWidget):
         if child:
             self._child_hwnd = child
             self._child_finder.stop()
-            logger.info("RDP child HWND captured: %s", child)
+            logger.info(
+                "RDP child HWND captured after %d polls: parent=%s child=%s",
+                self._child_poll_attempts, parent, child,
+            )
             self._resize_child_to_widget()
             _focus_window(child)
+        elif self._child_poll_attempts in (40, 100):
+            # ~6 s and ~15 s in -- if still nothing, surface it loudly.
+            logger.warning(
+                "RDPWidget: still no child window for parent HWND %s after %d "
+                "polls. xfreerdp /parent-window may not be embedding correctly.",
+                parent, self._child_poll_attempts,
+            )
+        elif self._child_poll_attempts >= 200:
+            # ~30 s -- give up so we don't poll forever.
+            self._child_finder.stop()
+            logger.error(
+                "RDPWidget: child window not found after %d polls; giving up. "
+                "RDP keyboard/resize will not work for this session.",
+                self._child_poll_attempts,
+            )
 
     def _resize_child_to_widget(self) -> None:
         if self._child_hwnd is None:
