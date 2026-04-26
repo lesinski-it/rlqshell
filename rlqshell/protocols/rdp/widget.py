@@ -26,6 +26,8 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 if sys.platform == "win32":
+    from ctypes import wintypes
+
     _user32 = ctypes.windll.user32
     _kernel32 = ctypes.windll.kernel32
     _SWP_NOMOVE = 0x0002
@@ -52,6 +54,10 @@ if sys.platform == "win32":
     _user32.SetWindowPos.restype = ctypes.c_bool
     _user32.SetFocus.argtypes = [ctypes.c_void_p]
     _user32.SetFocus.restype = ctypes.c_void_p
+    _user32.SetForegroundWindow.argtypes = [ctypes.c_void_p]
+    _user32.SetForegroundWindow.restype = ctypes.c_bool
+    _user32.BringWindowToTop.argtypes = [ctypes.c_void_p]
+    _user32.BringWindowToTop.restype = ctypes.c_bool
     _user32.GetWindowThreadProcessId.argtypes = [
         ctypes.c_void_p, ctypes.POINTER(ctypes.c_ulong),
     ]
@@ -60,47 +66,90 @@ if sys.platform == "win32":
         ctypes.c_ulong, ctypes.c_ulong, ctypes.c_bool,
     ]
     _user32.AttachThreadInput.restype = ctypes.c_bool
+    _user32.IsWindowVisible.argtypes = [ctypes.c_void_p]
+    _user32.IsWindowVisible.restype = ctypes.c_bool
+    _user32.GetClientRect.argtypes = [
+        ctypes.c_void_p, ctypes.POINTER(wintypes.RECT),
+    ]
+    _user32.GetClientRect.restype = ctypes.c_bool
+    _user32.GetClassNameW.argtypes = [
+        ctypes.c_void_p, ctypes.c_wchar_p, ctypes.c_int,
+    ]
+    _user32.GetClassNameW.restype = ctypes.c_int
     _kernel32.GetCurrentThreadId.restype = ctypes.c_ulong
 
-    def _find_child_hwnd(parent_hwnd: int) -> int | None:
-        """Find the embedded FreeRDP window inside the given parent.
+    def _window_class(hwnd: int) -> str:
+        buf = ctypes.create_unicode_buffer(256)
+        _user32.GetClassNameW(hwnd, buf, 256)
+        return buf.value or ""
 
-        EnumChildWindows walks the entire descendant tree and returns
-        every native window regardless of style (WS_CHILD or WS_POPUP
-        reparented via SetParent). GetWindow(GW_CHILD) misses the
-        latter, which is how some FreeRDP builds create their window.
+    def _find_child_hwnd(parent_hwnd: int) -> int | None:
+        """Find the embedded FreeRDP rendering surface inside our parent HWND.
+
+        EnumChildWindows recurses through the full descendant tree and
+        every kind of window FreeRDP creates is in there: a top-level
+        container, the actual canvas it paints into, hidden message-only
+        windows, possibly tooltip windows. We log every candidate at
+        DEBUG and pick the largest *visible* one as the rendering
+        surface (sized to /size: -- almost certainly the largest area).
         """
         if not parent_hwnd:
             return None
-        found: list[int] = []
+        found: list[dict] = []
 
         def _cb(hwnd, _lparam):
-            found.append(int(hwnd))
-            return True  # continue enumeration to grab all descendants
+            try:
+                rect = wintypes.RECT()
+                _user32.GetClientRect(hwnd, ctypes.byref(rect))
+                found.append({
+                    "hwnd": int(hwnd),
+                    "visible": bool(_user32.IsWindowVisible(hwnd)),
+                    "w": int(rect.right),
+                    "h": int(rect.bottom),
+                    "class": _window_class(hwnd),
+                })
+            except Exception:
+                pass
+            return True
 
         try:
             _user32.EnumChildWindows(parent_hwnd, _EnumChildProc(_cb), None)
         except Exception:
             return None
-        # Return the deepest/last enumerated window, which in practice is
-        # the actual rendering surface FreeRDP creates inside its top
-        # container.
-        return found[-1] if found else None
+
+        if not found:
+            return None
+        for c in found:
+            logger.debug("RDP candidate child: %s", c)
+
+        # Largest visible window in the descendant tree -- this matches the
+        # FreeRDP rendering surface in every layout we've seen.
+        visible = [c for c in found if c["visible"] and c["w"] > 0 and c["h"] > 0]
+        chosen = max(visible, key=lambda c: c["w"] * c["h"]) if visible else found[0]
+        logger.info(
+            "RDP child picked: hwnd=%s class=%r %dx%d (out of %d candidates)",
+            chosen["hwnd"], chosen.get("class", ""),
+            chosen.get("w", 0), chosen.get("h", 0), len(found),
+        )
+        return chosen["hwnd"]
 
     def _resize_child(hwnd: int, width: int, height: int) -> None:
         """Resize a child window to (width, height) at (0, 0) relative to parent."""
-        _user32.SetWindowPos(
+        ok = _user32.SetWindowPos(
             hwnd, None, 0, 0, max(1, width), max(1, height),
             _SWP_NOZORDER | _SWP_NOACTIVATE | _SWP_SHOWWINDOW | _SWP_FRAMECHANGED,
         )
+        if not ok:
+            logger.debug("SetWindowPos(%s, %dx%d) returned FALSE", hwnd, width, height)
 
     def _focus_window(hwnd: int) -> None:
-        """Move keyboard focus to the given HWND.
+        """Move keyboard focus to the given HWND across processes.
 
         SetFocus is silently ignored when the target window belongs to
-        another thread (which is always our case -- xfreerdp runs in a
-        separate process, hence different thread). Attach the input
-        queues for the duration of the call so SetFocus actually lands.
+        another thread (xfreerdp runs in a separate process), so we
+        attach the input queues for the duration of the call. We also
+        call BringWindowToTop so the embedded canvas is on the Z-order
+        top and ready to receive keystrokes.
         """
         if not hwnd:
             return
@@ -113,6 +162,7 @@ if sys.platform == "win32":
                     current_thread, target_thread, True,
                 ))
             try:
+                _user32.BringWindowToTop(hwnd)
                 _user32.SetFocus(hwnd)
             finally:
                 if attached:
