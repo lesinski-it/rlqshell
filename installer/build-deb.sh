@@ -13,7 +13,7 @@ PKG_ROOT="${BUILD_DIR}/pkgroot"
 PACKAGE_NAME="rlqshell"
 APP_NAME="RLQShell"
 INSTALL_DIR="/opt/rlqshell"
-DEFAULT_DEPENDS="libglib2.0-0, libgl1, libegl1, libxkbcommon0, libfontconfig1, libdbus-1-3, libx11-xcb1, libxcb1, libxcb-cursor0, libxrender1, libxext6, libxfixes3"
+DEFAULT_DEPENDS="libglib2.0-0, libgl1, libegl1, libxkbcommon0, libfontconfig1, libdbus-1-3, libx11-xcb1, libxcb1, libxcb-cursor0, libxrender1, libxext6, libxfixes3, freerdp2-x11 | freerdp3-x11"
 
 VERSION=""
 ARCH=""
