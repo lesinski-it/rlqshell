@@ -68,6 +68,9 @@ if sys.platform == "win32":
     _user32.AttachThreadInput.restype = ctypes.c_bool
     _user32.IsWindowVisible.argtypes = [ctypes.c_void_p]
     _user32.IsWindowVisible.restype = ctypes.c_bool
+    _user32.ShowWindow.argtypes = [ctypes.c_void_p, ctypes.c_int]
+    _user32.ShowWindow.restype = ctypes.c_bool
+    _SW_SHOW = 5
     _user32.GetClientRect.argtypes = [
         ctypes.c_void_p, ctypes.POINTER(wintypes.RECT),
     ]
@@ -134,13 +137,21 @@ if sys.platform == "win32":
         return chosen["hwnd"]
 
     def _resize_child(hwnd: int, width: int, height: int) -> None:
-        """Resize a child window to (width, height) at (0, 0) relative to parent."""
+        """Resize+move+show a child window to fill (0,0)-(width,height)."""
+        # ShowWindow first -- some FreeRDP builds create the window with
+        # WS_VISIBLE off and rely on the parent to make it visible.
+        _user32.ShowWindow(hwnd, _SW_SHOW)
         ok = _user32.SetWindowPos(
             hwnd, None, 0, 0, max(1, width), max(1, height),
             _SWP_NOZORDER | _SWP_NOACTIVATE | _SWP_SHOWWINDOW | _SWP_FRAMECHANGED,
         )
-        if not ok:
-            logger.debug("SetWindowPos(%s, %dx%d) returned FALSE", hwnd, width, height)
+        # Verify what FreeRDP actually got
+        rect = wintypes.RECT()
+        _user32.GetClientRect(hwnd, ctypes.byref(rect))
+        logger.info(
+            "SetWindowPos(hwnd=%s req=%dx%d) ok=%s -> client now %dx%d",
+            hwnd, width, height, ok, rect.right, rect.bottom,
+        )
 
     def _focus_window(hwnd: int) -> None:
         """Move keyboard focus to the given HWND across processes.
@@ -303,11 +314,9 @@ class RDPWidget(QWidget):
     def _resize_child_to_widget(self) -> None:
         if self._child_hwnd is None:
             return
-        # Use device-independent pixels via Qt's logicalDpi / devicePixelRatio?
-        # SetWindowPos expects raw pixels — Qt's width()/height() already
-        # return device-independent units that match the parent HWND's client
-        # area on Windows so the raw values are correct here.
-        _resize_child(self._child_hwnd, self.width(), self.height())
+        w, h = self.width(), self.height()
+        logger.info("Resizing FreeRDP child to widget size %dx%d", w, h)
+        _resize_child(self._child_hwnd, w, h)
 
     def resizeEvent(self, event) -> None:  # noqa: N802 -- Qt API
         super().resizeEvent(event)
