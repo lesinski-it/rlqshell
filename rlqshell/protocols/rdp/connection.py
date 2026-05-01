@@ -261,12 +261,14 @@ class RDPConnection(AbstractConnection):
         if self._resolution and "x" in self._resolution:
             args.append(f"/size:{self._resolution}")
 
+        # Keep floatbar always configured so users still get the native RDP
+        # top bar after switching to fullscreen from windowed mode.
+        args.append("/floatbar:sticky:on,default:visible,show:always")
+
         if self._fullscreen:
-            # +f is the canonical fullscreen flag on FreeRDP 3.x. Pair it
-            # with a sticky always-visible floatbar so the user can exit
-            # fullscreen without having to remember Ctrl+Alt+Enter.
-            args.append("+f")
-            args.append("/floatbar:sticky:on,default:visible,show:always")
+            # /f has broader compatibility across packaged and system
+            # FreeRDP builds than +f on some Windows environments.
+            args.append("/f")
         if self._multimon:
             args.append("/multimon")
 
