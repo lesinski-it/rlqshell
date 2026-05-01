@@ -12,8 +12,8 @@
     already present, unless -Force is passed.
 
 .PARAMETER Version
-    freerdp.portable version on Chocolatey. Default: 3.25.1.
-    Version 3.25.1 is required for /floatbar support in wfreerdp.exe.
+    freerdp.portable version on Chocolatey. Default: 3.25.0.
+    Version 3.25.0+ is required for /floatbar support in wfreerdp.exe.
     Version 3.21.0 does not show the floatbar in fullscreen sessions.
 
 .PARAMETER Force
@@ -22,11 +22,11 @@
 .EXAMPLE
     pwsh installer/fetch-freerdp.ps1
     pwsh installer/fetch-freerdp.ps1 -Force
-    pwsh installer/fetch-freerdp.ps1 -Version 3.25.1
+    pwsh installer/fetch-freerdp.ps1 -Version 3.25.0
 #>
 [CmdletBinding()]
 param(
-    [string]$Version = '3.25.1',
+    [string]$Version = '3.25.0',
     [switch]$Force
 )
 
