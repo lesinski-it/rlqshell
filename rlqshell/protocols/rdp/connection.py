@@ -86,6 +86,13 @@ def _find_freerdp_binary() -> str | None:
             if candidate.exists():
                 return str(candidate)
 
+    # On frozen Windows builds (MSI install), do not silently fall back to a
+    # random system FreeRDP from PATH. Different builds expose different UI
+    # features (like the fullscreen floatbar), which leads to inconsistent
+    # behavior across machines.
+    if sys.platform == "win32" and getattr(sys, "frozen", False):
+        return None
+
     # 4. PATH
     for name in names:
         found = shutil.which(name)
@@ -201,6 +208,11 @@ class RDPConnection(AbstractConnection):
     def _spawn(self) -> None:
         binary = _find_freerdp_binary()
         if binary is None:
+            if sys.platform == "win32" and getattr(sys, "frozen", False):
+                raise ConnectionError(
+                    "Bundled FreeRDP is missing from RLQShell installation. "
+                    "Reinstall/update RLQShell (MSI) to restore the freerdp folder.",
+                )
             raise ConnectionError(
                 "FreeRDP not found. Install it (Windows: choco install freerdp; "
                 "Linux: apt install freerdp2-x11) and ensure it is on PATH.",
@@ -226,6 +238,7 @@ class RDPConnection(AbstractConnection):
             binary, self._smartcard, self._drives_enabled, self._printers,
             self._fullscreen, self._multimon,
         )
+        logger.debug("FreeRDP args: %s", " ".join(args))
         proc.start()
         if not proc.waitForStarted(5000):
             raise ConnectionError(f"Could not start FreeRDP: {proc.errorString()}")
