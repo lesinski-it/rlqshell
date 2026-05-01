@@ -487,7 +487,7 @@ class ConnectionsPage(QWidget):
         asyncio.ensure_future(self._connect_async(tab_id, conn, host))
 
     def _open_rdp(self, host: Host) -> None:
-        """Open an RDP graphical session (FreeRDP subprocess embedded in our window)."""
+        """Open an RDP graphical session."""
         tab_id = str(uuid.uuid4())[:8]
         label = host.label or host.address
 
@@ -528,11 +528,13 @@ class ConnectionsPage(QWidget):
             drives_enabled=host.rdp_drives_enabled,
             drive_mapping=host.rdp_drive_mapping,
             printers=host.rdp_printers,
+            fullscreen=host.rdp_fullscreen,
+            multimon=host.rdp_multimon,
         )
 
         rdp_widget = RDPWidget(conn)
-        # FreeRDP renders into our window via /parent-window — clipboard sync is
-        # done by FreeRDP at the OS level, so the in-app bridge is not needed.
+        # FreeRDP handles clipboard sync at the OS level, so the in-app
+        # bridge is not needed for RDP.
         container = RemoteDesktopContainer(
             rdp_widget, conn, "rdp", enable_clipboard=False,
         )
@@ -925,6 +927,8 @@ class ConnectionsPage(QWidget):
             drives_enabled=host.rdp_drives_enabled,
             drive_mapping=host.rdp_drive_mapping,
             printers=host.rdp_printers,
+            fullscreen=host.rdp_fullscreen,
+            multimon=host.rdp_multimon,
         )
 
         container.set_connection(conn, "rdp", enable_clipboard=False)

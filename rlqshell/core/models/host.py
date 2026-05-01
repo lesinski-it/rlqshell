@@ -70,6 +70,8 @@ class Host:
     rdp_smartcard: bool = False
     rdp_drives_enabled: bool = False
     rdp_printers: bool = False
+    rdp_fullscreen: bool = False
+    rdp_multimon: bool = False
 
     # VNC settings
     vnc_port: int = 5900

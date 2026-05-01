@@ -1,10 +1,9 @@
-"""RDP connection — wraps xfreerdp/wfreerdp subprocess embedded in a Qt window.
+"""RDP connection — wraps xfreerdp/wfreerdp subprocess.
 
 The previous in-process implementation (aardwolf) lacked MS-RDPDR/SCARD support,
 so smart cards, drive mapping, and printer redirection were impossible. This
 implementation delegates to FreeRDP, the same backend used by Remmina and
-MobaXterm. The remote desktop is rendered by FreeRDP into a child window we
-own via Qt's `winId()` and FreeRDP's `/parent-window:` argument.
+MobaXterm.
 """
 
 from __future__ import annotations
@@ -106,7 +105,7 @@ def _find_freerdp_binary() -> str | None:
 
 
 class RDPConnection(AbstractConnection):
-    """RDP connection driven by FreeRDP, embedded into a host Qt window."""
+    """RDP connection driven by a FreeRDP subprocess."""
 
     # Signals kept for compatibility with ClipboardBridge — xfreerdp handles
     # clipboard sync natively at the OS level so these are never emitted.
@@ -129,7 +128,8 @@ class RDPConnection(AbstractConnection):
         drives_enabled: bool = False,
         drive_mapping: str | None = None,
         printers: bool = False,
-        parent_winid: int | None = None,
+        fullscreen: bool = False,
+        multimon: bool = False,
     ) -> None:
         super().__init__()
         self._hostname = hostname
@@ -145,12 +145,23 @@ class RDPConnection(AbstractConnection):
         self._drives_enabled = drives_enabled
         self._drive_mapping = drive_mapping
         self._printers = printers
-        self._parent_winid = parent_winid
+        self._fullscreen = fullscreen
+        self._multimon = multimon
 
         self._process: QProcess | None = None
         self._connected = False
         self._stderr_buffer = ""
         self._closing = False
+
+    @property
+    def pid(self) -> int | None:
+        if self._process is None:
+            return None
+        try:
+            p = int(self._process.processId())
+            return p if p > 0 else None
+        except Exception:
+            return None
 
     # ------------------------------------------------------------------
     # AbstractConnection API
@@ -163,10 +174,6 @@ class RDPConnection(AbstractConnection):
     @property
     def protocol(self) -> str:
         return "rdp"
-
-    def set_parent_window(self, winid: int | None) -> None:
-        """Attach the parent native window before connect()."""
-        self._parent_winid = winid
 
     async def connect(self) -> None:
         try:
@@ -214,16 +221,11 @@ class RDPConnection(AbstractConnection):
         proc.finished.connect(self._on_proc_finished)
 
         logger.info(
-            "Spawning FreeRDP: %s (smartcard=%s drives=%s printers=%s parent_winid=%s)",
+            "Spawning FreeRDP: %s (smartcard=%s drives=%s printers=%s "
+            "fullscreen=%s multimon=%s)",
             binary, self._smartcard, self._drives_enabled, self._printers,
-            self._parent_winid,
+            self._fullscreen, self._multimon,
         )
-        if not self._parent_winid:
-            logger.warning(
-                "No parent_winid set -- FreeRDP will open in a separate window "
-                "instead of embedding into the Qt widget. RDPWidget should call "
-                "set_parent_window() before connect().",
-            )
         proc.start()
         if not proc.waitForStarted(5000):
             raise ConnectionError(f"Could not start FreeRDP: {proc.errorString()}")
@@ -235,13 +237,22 @@ class RDPConnection(AbstractConnection):
     # ------------------------------------------------------------------
 
     def _build_args(self) -> list[str]:
+        # FreeRDP always opens as a stand-alone top-level window; the
+        # RLQShell tab is just a status surface with a "bring to front"
+        # button. Embedding via /parent-window was tried but the bundled
+        # wfreerdp.exe ignores SetWindowPos on the embedded child, and
+        # /smart-sizing crashes its session negotiation — see widget.py.
+        title = f"RLQShell RDP - {self._hostname}"
         args: list[str] = [
             f"/v:{self._hostname}:{self._port}",
             f"/u:{self._username}",
             f"/p:{self._password or ''}",
             f"/bpp:{min(max(int(self._color_depth), 15), 32)}",
+            f"/title:{title}",
             "/cert:ignore",
             "/sec:nla,tls,rdp",
+            # /dynamic-resolution lets the server rerender at the new
+            # framebuffer size when the user resizes FreeRDP's window.
             "/dynamic-resolution",
         ]
         if self._domain:
@@ -250,8 +261,14 @@ class RDPConnection(AbstractConnection):
         if self._resolution and "x" in self._resolution:
             args.append(f"/size:{self._resolution}")
 
-        if self._parent_winid:
-            args.append(f"/parent-window:{int(self._parent_winid)}")
+        if self._fullscreen:
+            # +f is the canonical fullscreen flag on FreeRDP 3.x. Pair it
+            # with a sticky always-visible floatbar so the user can exit
+            # fullscreen without having to remember Ctrl+Alt+Enter.
+            args.append("+f")
+            args.append("/floatbar:sticky:on,default:visible,show:always")
+        if self._multimon:
+            args.append("/multimon")
 
         # Local resource redirection
         if self._clipboard:

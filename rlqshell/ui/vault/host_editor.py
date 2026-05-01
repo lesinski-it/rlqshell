@@ -227,6 +227,20 @@ class HostEditorContent(QWidget):
         self._rdp_printers_check = QCheckBox("Local printers")
         self._form_layout.addWidget(self._rdp_printers_check)
 
+        # Display options
+        self._rdp_display_header = QLabel("Display")
+        self._rdp_display_header.setStyleSheet(
+            f"font-size: 13px; font-weight: 600; color: {Colors.TEXT_PRIMARY}; "
+            f"background: transparent; padding-top: 8px;"
+        )
+        self._form_layout.addWidget(self._rdp_display_header)
+
+        self._rdp_fullscreen_check = QCheckBox("Start in fullscreen (toggle: Ctrl+Alt+Enter)")
+        self._form_layout.addWidget(self._rdp_fullscreen_check)
+
+        self._rdp_multimon_check = QCheckBox("Span across all monitors")
+        self._form_layout.addWidget(self._rdp_multimon_check)
+
         # Drive paths field is only meaningful when drive redirection is enabled
         self._rdp_drives_check.toggled.connect(self._rdp_drive_mapping_edit.setEnabled)
         self._rdp_drives_check.toggled.connect(self._rdp_drive_mapping_lbl.setEnabled)
@@ -246,6 +260,9 @@ class HostEditorContent(QWidget):
             self._rdp_drives_check,
             self._rdp_drive_mapping_lbl, self._rdp_drive_mapping_edit,
             self._rdp_printers_check,
+            self._rdp_display_header,
+            self._rdp_fullscreen_check,
+            self._rdp_multimon_check,
         ]
 
         # VNC options section
@@ -347,6 +364,8 @@ class HostEditorContent(QWidget):
         self._rdp_drives_check.stateChanged.connect(self._schedule_save)
         self._rdp_drive_mapping_edit.textChanged.connect(self._schedule_save)
         self._rdp_printers_check.stateChanged.connect(self._schedule_save)
+        self._rdp_fullscreen_check.stateChanged.connect(self._schedule_save)
+        self._rdp_multimon_check.stateChanged.connect(self._schedule_save)
         self._vnc_clipboard_check.stateChanged.connect(self._schedule_save)
 
         # Show correct protocol section initially
@@ -375,6 +394,8 @@ class HostEditorContent(QWidget):
         self._rdp_smartcard_check.blockSignals(True)
         self._rdp_drives_check.blockSignals(True)
         self._rdp_printers_check.blockSignals(True)
+        self._rdp_fullscreen_check.blockSignals(True)
+        self._rdp_multimon_check.blockSignals(True)
         self._vnc_clipboard_check.blockSignals(True)
 
         self._label_edit.setText(host.label)
@@ -403,6 +424,8 @@ class HostEditorContent(QWidget):
         self._rdp_drive_mapping_edit.setEnabled(host.rdp_drives_enabled)
         self._rdp_drive_mapping_lbl.setEnabled(host.rdp_drives_enabled)
         self._rdp_printers_check.setChecked(host.rdp_printers)
+        self._rdp_fullscreen_check.setChecked(host.rdp_fullscreen)
+        self._rdp_multimon_check.setChecked(host.rdp_multimon)
         self._vnc_clipboard_check.setChecked(host.vnc_clipboard)
 
         # Load identities
@@ -440,6 +463,8 @@ class HostEditorContent(QWidget):
         self._rdp_smartcard_check.blockSignals(False)
         self._rdp_drives_check.blockSignals(False)
         self._rdp_printers_check.blockSignals(False)
+        self._rdp_fullscreen_check.blockSignals(False)
+        self._rdp_multimon_check.blockSignals(False)
         self._vnc_clipboard_check.blockSignals(False)
 
         # Load tags
@@ -534,6 +559,8 @@ class HostEditorContent(QWidget):
         self._host.rdp_drives_enabled = self._rdp_drives_check.isChecked()
         self._host.rdp_drive_mapping = self._rdp_drive_mapping_edit.text() or None
         self._host.rdp_printers = self._rdp_printers_check.isChecked()
+        self._host.rdp_fullscreen = self._rdp_fullscreen_check.isChecked()
+        self._host.rdp_multimon = self._rdp_multimon_check.isChecked()
         self._host.vnc_clipboard = self._vnc_clipboard_check.isChecked()
         self._host.notes = self._notes_edit.toPlainText() or None
         self._host.group_id = self._group_combo.currentData()
