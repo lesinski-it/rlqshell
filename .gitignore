@@ -55,3 +55,7 @@ docs/build-linux-deb.md
 
 # Bundled FreeRDP binaries — fetched at build time by installer/fetch-freerdp.ps1
 installer/freerdp/
+
+# Research / diagnostic scripts — not part of the production codebase
+scripts/poc_rdp_windows_mstscax.py
+scripts/diag_all_windows.py
