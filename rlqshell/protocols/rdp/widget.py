@@ -70,22 +70,6 @@ if sys.platform == "win32":
     _user32.SetForegroundWindow.restype = ctypes.c_bool
     _user32.ShowWindow.argtypes = [ctypes.c_void_p, ctypes.c_int]
     _user32.ShowWindow.restype = ctypes.c_bool
-    _user32.MoveWindow.argtypes = [
-        ctypes.c_void_p, ctypes.c_int, ctypes.c_int,
-        ctypes.c_int, ctypes.c_int, ctypes.c_bool,
-    ]
-    _user32.MoveWindow.restype = ctypes.c_bool
-    _user32.GetWindowLongPtrW.argtypes = [ctypes.c_void_p, ctypes.c_int]
-    _user32.GetWindowLongPtrW.restype = ctypes.c_ssize_t
-    _user32.SetWindowLongPtrW.argtypes = [
-        ctypes.c_void_p, ctypes.c_int, ctypes.c_ssize_t,
-    ]
-    _user32.SetWindowLongPtrW.restype = ctypes.c_ssize_t
-    _user32.SetWindowPos.argtypes = [
-        ctypes.c_void_p, ctypes.c_void_p,
-        ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_uint,
-    ]
-    _user32.SetWindowPos.restype = ctypes.c_bool
     _user32.IsIconic.argtypes = [ctypes.c_void_p]
     _user32.IsIconic.restype = ctypes.c_bool
     _user32.AttachThreadInput.argtypes = [
@@ -95,73 +79,6 @@ if sys.platform == "win32":
     _kernel32.GetCurrentThreadId.restype = ctypes.c_ulong
 
     _SW_RESTORE = 9
-    _SW_HIDE = 0
-    _SW_SHOWNOACTIVATE = 4
-
-    _GWL_STYLE = -16
-    _WS_VISIBLE = 0x10000000
-    _WS_CAPTION = 0x00C00000
-    _WS_THICKFRAME = 0x00040000
-    _WS_MINIMIZEBOX = 0x00020000
-    _WS_MAXIMIZEBOX = 0x00010000
-    _WS_SYSMENU = 0x00080000
-    _WS_POPUP = 0x80000000
-
-    _SWP_NOZORDER = 0x0004
-    _SWP_NOACTIVATE = 0x0010
-    _SWP_FRAMECHANGED = 0x0020
-
-    # Virtual-Key codes -- subset we need for the fullscreen toggle
-    _VK_CONTROL = 0x11
-    _VK_MENU = 0x12  # ALT
-    _VK_RETURN = 0x0D
-    _KEYEVENTF_KEYUP = 0x0002
-
-    class _KEYBDINPUT(ctypes.Structure):
-        _fields_ = [
-            ("wVk", ctypes.c_ushort),
-            ("wScan", ctypes.c_ushort),
-            ("dwFlags", ctypes.c_ulong),
-            ("time", ctypes.c_ulong),
-            ("dwExtraInfo", ctypes.c_void_p),
-        ]
-
-    class _INPUT_UNION(ctypes.Union):
-        _fields_ = [("ki", _KEYBDINPUT)]
-
-    class _INPUT(ctypes.Structure):
-        _anonymous_ = ("u",)
-        _fields_ = [
-            ("type", ctypes.c_ulong),
-            ("u", _INPUT_UNION),
-        ]
-
-    _user32.SendInput.argtypes = [
-        ctypes.c_uint, ctypes.POINTER(_INPUT), ctypes.c_int,
-    ]
-    _user32.SendInput.restype = ctypes.c_uint
-
-    def _make_key(vk: int, key_up: bool) -> "_INPUT":
-        ev = _INPUT()
-        ev.type = 1  # INPUT_KEYBOARD
-        ev.ki.wVk = vk
-        ev.ki.wScan = 0
-        ev.ki.dwFlags = _KEYEVENTF_KEYUP if key_up else 0
-        ev.ki.time = 0
-        ev.ki.dwExtraInfo = None
-        return ev
-
-    def _send_ctrl_alt_enter() -> None:
-        """Send Ctrl+Alt+Enter to whatever window currently has focus."""
-        events = (_INPUT * 6)(
-            _make_key(_VK_CONTROL, False),
-            _make_key(_VK_MENU, False),
-            _make_key(_VK_RETURN, False),
-            _make_key(_VK_RETURN, True),
-            _make_key(_VK_MENU, True),
-            _make_key(_VK_CONTROL, True),
-        )
-        _user32.SendInput(6, events, ctypes.sizeof(_INPUT))
 
     def _window_class(hwnd: int) -> str:
         buf = ctypes.create_unicode_buffer(256)
@@ -222,16 +139,6 @@ if sys.platform == "win32":
         except Exception:
             logger.debug("BringToFront failed for HWND %s", hwnd, exc_info=True)
 
-    def _toggle_fullscreen_for_hwnd(hwnd: int) -> None:
-        """Bring xfreerdp to front and synthesize Ctrl+Alt+Enter."""
-        if not hwnd:
-            return
-        _bring_window_to_front(hwnd)
-        # SendInput targets the foreground window, so we must wait briefly
-        # for the BringWindowToTop/SetForegroundWindow above to take effect
-        # before injecting the keystrokes.
-        QTimer.singleShot(80, _send_ctrl_alt_enter)
-
 else:
     def _find_toplevel_for_pid(pid: int) -> int | None:  # noqa: ARG001
         return None
@@ -239,10 +146,7 @@ else:
     def _bring_window_to_front(hwnd: int) -> None:  # noqa: ARG001
         pass
 
-    def _toggle_fullscreen_for_hwnd(hwnd: int) -> None:  # noqa: ARG001
-        pass
 
-    
 
 
 # ---------------------------------------------------------------------------
@@ -296,13 +200,6 @@ class RDPWidget(QWidget):
         self._focus_btn.setEnabled(False)
         btn_row.addWidget(self._focus_btn)
 
-        self._fs_btn = QPushButton("Pełny ekran (Ctrl+Alt+Enter)", self)
-        self._fs_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._fs_btn.setStyleSheet(btn_style)
-        self._fs_btn.clicked.connect(self._toggle_fullscreen)
-        self._fs_btn.setEnabled(False)
-        btn_row.addWidget(self._fs_btn)
-
         btn_row.addStretch(1)
         layout.addLayout(btn_row)
         layout.addStretch(3)
@@ -325,19 +222,15 @@ class RDPWidget(QWidget):
     def set_connection(self, conn: RDPConnection) -> None:
         self._conn = conn
         self._focus_btn.setEnabled(False)
-        self._fs_btn.setEnabled(False)
         if sys.platform == "win32":
             self._discover_timer.start()
 
     def _check_window_available(self) -> None:
         if self._conn is None or self._conn.pid is None:
             self._focus_btn.setEnabled(False)
-            self._fs_btn.setEnabled(False)
             return
         hwnd = _find_toplevel_for_pid(self._conn.pid)
-        enabled = hwnd is not None
-        self._focus_btn.setEnabled(enabled)
-        self._fs_btn.setEnabled(enabled)
+        self._focus_btn.setEnabled(hwnd is not None)
         if hwnd is None and not self._conn.is_connected:
             # xfreerdp exited; no point polling further.
             self._discover_timer.stop()
@@ -348,14 +241,6 @@ class RDPWidget(QWidget):
         hwnd = _find_toplevel_for_pid(self._conn.pid)
         if hwnd:
             _bring_window_to_front(hwnd)
-
-    def _toggle_fullscreen(self) -> None:
-        """Bring xfreerdp to front and synthesize Ctrl+Alt+Enter to toggle FS."""
-        if self._conn is None or self._conn.pid is None:
-            return
-        hwnd = _find_toplevel_for_pid(self._conn.pid)
-        if hwnd:
-            _toggle_fullscreen_for_hwnd(hwnd)
 
     # ------------------------------------------------------------------
     # Overlay (status / error messages)
