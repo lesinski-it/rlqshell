@@ -68,9 +68,12 @@ class UpdateSettings(QWidget):
         form.addRow(self._make_label("Automatic checking"), self._auto_check)
 
         self._interval = QSpinBox()
-        self._interval.setRange(1, 168)
-        self._interval.setSuffix(" h")
-        self._interval.setValue(config.get("updates.check_interval_hours", 24))
+        self._interval.setRange(1, 10080)
+        self._interval.setSuffix(" min")
+        interval_m = config.get("updates.check_interval_minutes")
+        if interval_m is None:
+            interval_m = config.get("updates.check_interval_hours", 24) * 60
+        self._interval.setValue(int(interval_m))
         self._interval.setStyleSheet(
             f"QSpinBox {{ "
             f"  background-color: {Colors.BG_SURFACE}; color: {Colors.TEXT_PRIMARY}; "
@@ -136,7 +139,7 @@ class UpdateSettings(QWidget):
                 self._updater.start()
 
     def _on_interval_changed(self, value: int) -> None:
-        self._config.set("updates.check_interval_hours", value)
+        self._config.set("updates.check_interval_minutes", value)
         self._config.save()
         if self._updater and self._config.get("updates.auto_check", True):
             self._updater.stop()

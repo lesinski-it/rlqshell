@@ -58,10 +58,16 @@ class UpdateManager(QObject):
     def start(self) -> None:
         if not self._config.get("updates.auto_check", True):
             return
-        interval_h = self._config.get("updates.check_interval_hours", 24)
-        self._timer.start(interval_h * 3600 * 1000)
+        interval_m = self._config.get("updates.check_interval_minutes")
+        if interval_m is None:
+            # migrate legacy hours key
+            legacy_h = self._config.get("updates.check_interval_hours", 24)
+            interval_m = legacy_h * 60
+            self._config.set("updates.check_interval_minutes", interval_m)
+            self._config.save()
+        self._timer.start(int(interval_m) * 60 * 1000)
         QTimer.singleShot(5000, self._on_timer)
-        logger.info("Update checker started (every %dh)", interval_h)
+        logger.info("Update checker started (every %d min)", interval_m)
 
     def stop(self) -> None:
         self._timer.stop()
