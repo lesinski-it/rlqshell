@@ -235,9 +235,6 @@ class HostEditorContent(QWidget):
         )
         self._form_layout.addWidget(self._rdp_display_header)
 
-        self._rdp_fullscreen_check = QCheckBox("Start in fullscreen (toggle: Ctrl+Alt+Enter)")
-        self._form_layout.addWidget(self._rdp_fullscreen_check)
-
         self._rdp_multimon_check = QCheckBox("Span across all monitors")
         self._form_layout.addWidget(self._rdp_multimon_check)
 
@@ -261,7 +258,6 @@ class HostEditorContent(QWidget):
             self._rdp_drive_mapping_lbl, self._rdp_drive_mapping_edit,
             self._rdp_printers_check,
             self._rdp_display_header,
-            self._rdp_fullscreen_check,
             self._rdp_multimon_check,
         ]
 
@@ -364,7 +360,6 @@ class HostEditorContent(QWidget):
         self._rdp_drives_check.stateChanged.connect(self._schedule_save)
         self._rdp_drive_mapping_edit.textChanged.connect(self._schedule_save)
         self._rdp_printers_check.stateChanged.connect(self._schedule_save)
-        self._rdp_fullscreen_check.stateChanged.connect(self._schedule_save)
         self._rdp_multimon_check.stateChanged.connect(self._schedule_save)
         self._vnc_clipboard_check.stateChanged.connect(self._schedule_save)
 
@@ -394,7 +389,6 @@ class HostEditorContent(QWidget):
         self._rdp_smartcard_check.blockSignals(True)
         self._rdp_drives_check.blockSignals(True)
         self._rdp_printers_check.blockSignals(True)
-        self._rdp_fullscreen_check.blockSignals(True)
         self._rdp_multimon_check.blockSignals(True)
         self._vnc_clipboard_check.blockSignals(True)
 
@@ -424,7 +418,6 @@ class HostEditorContent(QWidget):
         self._rdp_drive_mapping_edit.setEnabled(host.rdp_drives_enabled)
         self._rdp_drive_mapping_lbl.setEnabled(host.rdp_drives_enabled)
         self._rdp_printers_check.setChecked(host.rdp_printers)
-        self._rdp_fullscreen_check.setChecked(host.rdp_fullscreen)
         self._rdp_multimon_check.setChecked(host.rdp_multimon)
         self._vnc_clipboard_check.setChecked(host.vnc_clipboard)
 
@@ -463,7 +456,6 @@ class HostEditorContent(QWidget):
         self._rdp_smartcard_check.blockSignals(False)
         self._rdp_drives_check.blockSignals(False)
         self._rdp_printers_check.blockSignals(False)
-        self._rdp_fullscreen_check.blockSignals(False)
         self._rdp_multimon_check.blockSignals(False)
         self._vnc_clipboard_check.blockSignals(False)
 
@@ -559,7 +551,6 @@ class HostEditorContent(QWidget):
         self._host.rdp_drives_enabled = self._rdp_drives_check.isChecked()
         self._host.rdp_drive_mapping = self._rdp_drive_mapping_edit.text() or None
         self._host.rdp_printers = self._rdp_printers_check.isChecked()
-        self._host.rdp_fullscreen = self._rdp_fullscreen_check.isChecked()
         self._host.rdp_multimon = self._rdp_multimon_check.isChecked()
         self._host.vnc_clipboard = self._vnc_clipboard_check.isChecked()
         self._host.notes = self._notes_edit.toPlainText() or None

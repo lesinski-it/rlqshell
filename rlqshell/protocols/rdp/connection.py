@@ -20,6 +20,22 @@ from rlqshell.protocols.base import AbstractConnection
 logger = logging.getLogger(__name__)
 
 
+def _primary_monitor_resolution() -> tuple[int, int] | None:
+    """Return primary monitor size in physical pixels (Windows only)."""
+    if sys.platform != "win32":
+        return None
+    try:
+        import ctypes  # noqa: PLC0415
+        user32 = ctypes.windll.user32
+        w = user32.GetSystemMetrics(0)   # SM_CXSCREEN
+        h = user32.GetSystemMetrics(1)   # SM_CYSCREEN
+        if w > 0 and h > 0:
+            return (w, h)
+    except Exception:
+        pass
+    return None
+
+
 _ERROR_MAP: list[tuple[str, str]] = [
     ("logon failure", "Login failed — invalid username or password."),
     ("authentication failure", "Authentication failed — check your credentials."),
@@ -170,6 +186,10 @@ class RDPConnection(AbstractConnection):
         except Exception:
             return None
 
+    @property
+    def wants_fullscreen(self) -> bool:
+        return self._fullscreen
+
     # ------------------------------------------------------------------
     # AbstractConnection API
     # ------------------------------------------------------------------
@@ -264,24 +284,36 @@ class RDPConnection(AbstractConnection):
             f"/title:{title}",
             "/cert:ignore",
             "/sec:nla,tls,rdp",
-            # /dynamic-resolution lets the server rerender at the new
-            # framebuffer size when the user resizes FreeRDP's window.
-            "/dynamic-resolution",
         ]
         if self._domain:
             args.append(f"/d:{self._domain}")
 
-        if self._resolution and "x" in self._resolution:
-            args.append(f"/size:{self._resolution}")
-
-        # Keep floatbar always configured so users still get the native RDP
-        # top bar after switching to fullscreen from windowed mode.
-        args.append("/floatbar:sticky:on,default:visible,show:always")
-
-        if self._fullscreen:
-            # /f has broader compatibility across packaged and system
-            # FreeRDP builds than +f on some Windows environments.
+        if self._fullscreen and sys.platform == "win32":
+            # Pin the framebuffer to the actual monitor resolution and skip
+            # /dynamic-resolution. wfreerdp's dynamic-resolution + floatbar
+            # fullscreen toggle causes a framebuffer mismatch on the second
+            # toggle (server keeps the windowed resolution, window is full-size
+            # → visible local desktop around the remote content). A fixed
+            # framebuffer at monitor size means every /f toggle renders
+            # correctly regardless of how many times the user toggles.
             args.append("/f")
+            mon = _primary_monitor_resolution()
+            size = f"{mon[0]}x{mon[1]}" if mon else self._resolution
+            if size and "x" in size:
+                args.append(f"/size:{size}")
+        else:
+            # Windowed sessions (and non-Windows fullscreen): /dynamic-resolution
+            # lets the server rerender at the new framebuffer size when the user
+            # resizes the FreeRDP window.
+            args.append("/dynamic-resolution")
+            if self._resolution and "x" in self._resolution:
+                args.append(f"/size:{self._resolution}")
+            if self._fullscreen:
+                args.append("/f")
+
+        # Floatbar provides in-session fullscreen toggle. show:always keeps it
+        # accessible in both windowed and fullscreen modes.
+        args.append("/floatbar:sticky:on,default:visible,show:always")
         if self._multimon:
             args.append("/multimon")
 

@@ -528,7 +528,7 @@ class ConnectionsPage(QWidget):
             drives_enabled=host.rdp_drives_enabled,
             drive_mapping=host.rdp_drive_mapping,
             printers=host.rdp_printers,
-            fullscreen=host.rdp_fullscreen,
+            fullscreen=False,
             multimon=host.rdp_multimon,
         )
 
@@ -927,7 +927,7 @@ class ConnectionsPage(QWidget):
             drives_enabled=host.rdp_drives_enabled,
             drive_mapping=host.rdp_drive_mapping,
             printers=host.rdp_printers,
-            fullscreen=host.rdp_fullscreen,
+            fullscreen=False,
             multimon=host.rdp_multimon,
         )
 
