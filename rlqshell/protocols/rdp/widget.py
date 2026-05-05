@@ -2,7 +2,7 @@
 
 We deliberately do NOT use FreeRDP's /parent-window embedding on Windows.
 FreeRDP runs as a normal top-level window while the RLQShell tab provides
-status and quick actions (focus, fullscreen toggle).
+status and quick actions (focus, fullscreen).
 
 Why this approach:
 
@@ -43,8 +43,7 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# Win32: find the xfreerdp top-level window for a known PID and bring it
-# to the foreground. Used only by the "Pokaż okno RDP" button.
+# Win32: find the main FreeRDP window for a known PID and bring it to front.
 # ---------------------------------------------------------------------------
 
 if sys.platform == "win32":
@@ -54,6 +53,11 @@ if sys.platform == "win32":
     _EnumWindowsProc = ctypes.WINFUNCTYPE(
         ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p,
     )
+
+    class _RECT(ctypes.Structure):
+        _fields_ = [("left", ctypes.c_long), ("top", ctypes.c_long),
+                    ("right", ctypes.c_long), ("bottom", ctypes.c_long)]
+
     _user32.EnumWindows.argtypes = [_EnumWindowsProc, ctypes.c_void_p]
     _user32.EnumWindows.restype = ctypes.c_bool
     _user32.GetWindowThreadProcessId.argtypes = [
@@ -62,10 +66,8 @@ if sys.platform == "win32":
     _user32.GetWindowThreadProcessId.restype = ctypes.c_ulong
     _user32.IsWindowVisible.argtypes = [ctypes.c_void_p]
     _user32.IsWindowVisible.restype = ctypes.c_bool
-    _user32.GetClassNameW.argtypes = [
-        ctypes.c_void_p, ctypes.c_wchar_p, ctypes.c_int,
-    ]
-    _user32.GetClassNameW.restype = ctypes.c_int
+    _user32.GetWindowRect.argtypes = [ctypes.c_void_p, ctypes.POINTER(_RECT)]
+    _user32.GetWindowRect.restype = ctypes.c_bool
     _user32.SetForegroundWindow.argtypes = [ctypes.c_void_p]
     _user32.SetForegroundWindow.restype = ctypes.c_bool
     _user32.ShowWindow.argtypes = [ctypes.c_void_p, ctypes.c_int]
@@ -80,15 +82,15 @@ if sys.platform == "win32":
 
     _SW_RESTORE = 9
 
-    def _window_class(hwnd: int) -> str:
-        buf = ctypes.create_unicode_buffer(256)
-        _user32.GetClassNameW(hwnd, buf, 256)
-        return buf.value or ""
-
     def _find_toplevel_for_pid(pid: int) -> int | None:
+        """Return the largest visible top-level window for *pid*.
+
+        wfreerdp may create multiple top-level windows (main desktop + floatbar).
+        Picking the largest area avoids accidentally selecting the floatbar.
+        """
         if not pid:
             return None
-        candidates: list[int] = []
+        candidates: list[tuple[int, int]] = []  # (area, hwnd)
 
         def _cb(hwnd, _lparam):
             try:
@@ -98,9 +100,12 @@ if sys.platform == "win32":
                     return True
                 if not _user32.IsWindowVisible(hwnd):
                     return True
-                cls = _window_class(hwnd)
-                if "freerdp" in cls.lower():
-                    candidates.append(int(hwnd))
+                rect = _RECT()
+                _user32.GetWindowRect(hwnd, ctypes.byref(rect))
+                w = rect.right - rect.left
+                h = rect.bottom - rect.top
+                if w > 0 and h > 0:
+                    candidates.append((w * h, int(hwnd)))
             except Exception:
                 pass
             return True
@@ -109,14 +114,13 @@ if sys.platform == "win32":
             _user32.EnumWindows(_EnumWindowsProc(_cb), None)
         except Exception:
             return None
-        return candidates[0] if candidates else None
+        if not candidates:
+            return None
+        candidates.sort(reverse=True)
+        return candidates[0][1]
 
     def _bring_window_to_front(hwnd: int) -> None:
-        """Restore + bring to front + give keyboard focus.
-
-        Uses AttachThreadInput so SetForegroundWindow is not silently
-        denied across the process boundary.
-        """
+        """Restore + foreground + keyboard focus across process boundary."""
         if not hwnd:
             return
         try:
@@ -147,8 +151,6 @@ else:
         pass
 
 
-
-
 # ---------------------------------------------------------------------------
 # RDPWidget
 # ---------------------------------------------------------------------------
@@ -157,6 +159,7 @@ class RDPWidget(QWidget):
     """Status panel for the RDP tab while FreeRDP runs in its own window."""
 
     reconnect_requested = Signal()
+    rdp_fullscreen_requested = Signal()
 
     def __init__(
         self,
@@ -175,8 +178,6 @@ class RDPWidget(QWidget):
         self._bg_color = QColor("#1e1e2e")
         self._reconnect_btn: QPushButton | None = None
 
-        # Vertical layout: top spacer -> centered "Bring window to front" button
-        # -> bottom spacer. paintEvent draws background + status text.
         btn_style = (
             "QPushButton { background: #89b4fa; color: #1e1e2e; "
             "border: none; border-radius: 8px; padding: 10px 24px; "
@@ -193,6 +194,7 @@ class RDPWidget(QWidget):
         btn_row = QHBoxLayout()
         btn_row.setSpacing(12)
         btn_row.addStretch(1)
+
         self._focus_btn = QPushButton("Pokaż okno RDP", self)
         self._focus_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._focus_btn.setStyleSheet(btn_style)
@@ -200,11 +202,17 @@ class RDPWidget(QWidget):
         self._focus_btn.setEnabled(False)
         btn_row.addWidget(self._focus_btn)
 
+        self._fs_btn = QPushButton("Pełny ekran", self)
+        self._fs_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._fs_btn.setStyleSheet(btn_style)
+        self._fs_btn.clicked.connect(self.rdp_fullscreen_requested.emit)
+        self._fs_btn.setEnabled(False)
+        btn_row.addWidget(self._fs_btn)
+
         btn_row.addStretch(1)
         layout.addLayout(btn_row)
         layout.addStretch(3)
 
-        # Periodic check: enable the button once xfreerdp's window appears.
         self._discover_timer = QTimer(self)
         self._discover_timer.setInterval(500)
         self._discover_timer.timeout.connect(self._check_window_available)
@@ -212,7 +220,7 @@ class RDPWidget(QWidget):
         if connection is not None:
             self.set_connection(connection)
 
-    def sizeHint(self) -> QSize:  # noqa: N802 -- Qt API
+    def sizeHint(self) -> QSize:  # noqa: N802
         return QSize(720, 480)
 
     # ------------------------------------------------------------------
@@ -222,17 +230,20 @@ class RDPWidget(QWidget):
     def set_connection(self, conn: RDPConnection) -> None:
         self._conn = conn
         self._focus_btn.setEnabled(False)
+        self._fs_btn.setEnabled(False)
         if sys.platform == "win32":
             self._discover_timer.start()
 
     def _check_window_available(self) -> None:
         if self._conn is None or self._conn.pid is None:
             self._focus_btn.setEnabled(False)
+            self._fs_btn.setEnabled(False)
             return
         hwnd = _find_toplevel_for_pid(self._conn.pid)
-        self._focus_btn.setEnabled(hwnd is not None)
+        enabled = hwnd is not None
+        self._focus_btn.setEnabled(enabled)
+        self._fs_btn.setEnabled(enabled)
         if hwnd is None and not self._conn.is_connected:
-            # xfreerdp exited; no point polling further.
             self._discover_timer.stop()
 
     def _focus_rdp_window(self) -> None:
@@ -243,7 +254,7 @@ class RDPWidget(QWidget):
             _bring_window_to_front(hwnd)
 
     # ------------------------------------------------------------------
-    # Overlay (status / error messages)
+    # Overlay
     # ------------------------------------------------------------------
 
     def show_overlay(
@@ -297,7 +308,7 @@ class RDPWidget(QWidget):
         by = min(by, max(0, self.height() - bh - 8))
         btn.move(bx, by)
 
-    def resizeEvent(self, event) -> None:  # noqa: N802 -- Qt API
+    def resizeEvent(self, event) -> None:  # noqa: N802
         super().resizeEvent(event)
         if self._reconnect_btn is not None and self._reconnect_btn.isVisible():
             self._position_reconnect_btn()
@@ -306,7 +317,7 @@ class RDPWidget(QWidget):
     # Painting
     # ------------------------------------------------------------------
 
-    def paintEvent(self, event: QPaintEvent) -> None:  # noqa: N802 -- Qt API
+    def paintEvent(self, event: QPaintEvent) -> None:  # noqa: N802
         painter = QPainter(self)
         try:
             painter.fillRect(self.rect(), self._bg_color)
@@ -317,9 +328,8 @@ class RDPWidget(QWidget):
             painter.end()
 
     def _paint_status(self, painter: QPainter) -> None:
-        """Always-on status block above the focus button."""
         if self._overlay_text:
-            return  # overlay takes over
+            return
         host = ""
         connected = False
         if self._conn is not None:

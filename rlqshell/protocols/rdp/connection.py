@@ -289,22 +289,19 @@ class RDPConnection(AbstractConnection):
             args.append(f"/d:{self._domain}")
 
         if self._fullscreen and sys.platform == "win32":
-            # Pin the framebuffer to the actual monitor resolution and skip
-            # /dynamic-resolution. wfreerdp's dynamic-resolution + floatbar
-            # fullscreen toggle causes a framebuffer mismatch on the second
-            # toggle (server keeps the windowed resolution, window is full-size
-            # → visible local desktop around the remote content). A fixed
-            # framebuffer at monitor size means every /f toggle renders
-            # correctly regardless of how many times the user toggles.
+            # Fullscreen on Windows: pin framebuffer to actual monitor resolution
+            # and skip /dynamic-resolution. This prevents the framebuffer mismatch
+            # that occurs when the server keeps a windowed resolution while
+            # FreeRDP's window is at fullscreen size.
             args.append("/f")
             mon = _primary_monitor_resolution()
             size = f"{mon[0]}x{mon[1]}" if mon else self._resolution
             if size and "x" in size:
                 args.append(f"/size:{size}")
         else:
-            # Windowed sessions (and non-Windows fullscreen): /dynamic-resolution
-            # lets the server rerender at the new framebuffer size when the user
-            # resizes the FreeRDP window.
+            # Windowed (or non-Windows fullscreen): dynamic-resolution lets the
+            # server rerender at the new framebuffer size when the user resizes
+            # the FreeRDP window.
             args.append("/dynamic-resolution")
             if self._resolution and "x" in self._resolution:
                 args.append(f"/size:{self._resolution}")
