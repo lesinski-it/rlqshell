@@ -187,6 +187,12 @@ class RDPConnection(AbstractConnection):
             return None
 
     @property
+    def is_process_running(self) -> bool:
+        if self._process is None:
+            return False
+        return self._process.state() != QProcess.ProcessState.NotRunning
+
+    @property
     def wants_fullscreen(self) -> bool:
         return self._fullscreen
 
@@ -289,22 +295,30 @@ class RDPConnection(AbstractConnection):
             args.append(f"/d:{self._domain}")
 
         if self._fullscreen and sys.platform == "win32":
-            # Fullscreen on Windows: pin framebuffer to actual monitor resolution
-            # and skip /dynamic-resolution. This prevents the framebuffer mismatch
-            # that occurs when the server keeps a windowed resolution while
-            # FreeRDP's window is at fullscreen size.
+            # Fullscreen na Windows: /f + rozdzielczość monitora bez /dynamic-resolution.
+            # /dynamic-resolution celowo pominięte: przy wyjściu z fullscreena przez
+            # floatbar FreeRDP wysyłałby RDPEDISP z rozmiarem okienkowym — serwer
+            # zmieniałby rozdzielczość i przy następnym /f reconneccie obraz byłby
+            # obcięty do rozmiaru okienkowego.
             args.append("/f")
             mon = _primary_monitor_resolution()
             size = f"{mon[0]}x{mon[1]}" if mon else self._resolution
             if size and "x" in size:
                 args.append(f"/size:{size}")
         else:
-            # Windowed (or non-Windows fullscreen): dynamic-resolution lets the
-            # server rerender at the new framebuffer size when the user resizes
-            # the FreeRDP window.
-            args.append("/dynamic-resolution")
-            if self._resolution and "x" in self._resolution:
-                args.append(f"/size:{self._resolution}")
+            # Windowed (lub non-Windows fullscreen): bez /dynamic-resolution.
+            # Używamy rozdzielczości monitora (nie konfiguracji hosta), żeby serwer
+            # od początku był w pełnym rozmiarze ekranu. Dzięki temu floatbar może
+            # przełączać fullscreen wielokrotnie bez wysyłania RDPEDISP resize —
+            # serwer zawsze zostaje przy rozdzielczości monitora i content zawsze
+            # wypełnia cały ekran w trybie fullscreen.
+            if sys.platform == "win32":
+                mon = _primary_monitor_resolution()
+                size = f"{mon[0]}x{mon[1]}" if mon else self._resolution
+            else:
+                size = self._resolution
+            if size and "x" in size:
+                args.append(f"/size:{size}")
             if self._fullscreen:
                 args.append("/f")
 
@@ -414,12 +428,62 @@ class RDPConnection(AbstractConnection):
         self._closing = True
         self._connected = False
         if self._process is not None:
+            # Wyślij WM_CLOSE do głównego okna FreeRDP zanim terminate().
+            # Daje to FreeRDP szansę wysłać MCS_Disconnect_Provider_Ultimatum do
+            # serwera — czysty RDP disconnect zamiast nagłego zerwania TCP.
+            # Serwer po czystym disconnect prawidłowo rozlicza sesję i display
+            # driver, co minimalizuje residual state przy szybkim reconneccie /f.
+            if sys.platform == "win32":
+                self._wm_close_main_window()
             try:
-                self._process.terminate()
                 if not self._process.waitForFinished(2000):
-                    self._process.kill()
-                    self._process.waitForFinished(1000)
+                    self._process.terminate()
+                    if not self._process.waitForFinished(2000):
+                        self._process.kill()
+                        self._process.waitForFinished(1000)
             except Exception:
                 logger.exception("Error terminating FreeRDP process")
             self._process = None
         logger.info("RDP connection closed (%s)", self._hostname)
+
+    def _wm_close_main_window(self) -> None:
+        """Wyślij WM_CLOSE do największego (głównego) okna FreeRDP dla tego PID."""
+        pid = self.pid
+        if not pid:
+            return
+        try:
+            import ctypes  # noqa: PLC0415
+            user32 = ctypes.windll.user32
+
+            class _RECT(ctypes.Structure):
+                _fields_ = [("left", ctypes.c_long), ("top", ctypes.c_long),
+                            ("right", ctypes.c_long), ("bottom", ctypes.c_long)]
+
+            candidates: list[tuple[int, int]] = []
+
+            enum_proc_t = ctypes.WINFUNCTYPE(
+                ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p,
+            )
+
+            def _cb(hwnd, _lp):
+                try:
+                    wnd_pid = ctypes.c_ulong(0)
+                    user32.GetWindowThreadProcessId(hwnd, ctypes.byref(wnd_pid))
+                    if wnd_pid.value == pid and user32.IsWindowVisible(hwnd):
+                        rect = _RECT()
+                        user32.GetWindowRect(hwnd, ctypes.byref(rect))
+                        area = (rect.right - rect.left) * (rect.bottom - rect.top)
+                        if area > 0:
+                            candidates.append((area, int(hwnd)))
+                except Exception:
+                    pass
+                return True
+
+            user32.EnumWindows(enum_proc_t(_cb), None)
+            if candidates:
+                candidates.sort(reverse=True)
+                hwnd = candidates[0][1]
+                user32.PostMessageW(hwnd, 0x0010, 0, 0)  # WM_CLOSE
+                logger.debug("WM_CLOSE sent to FreeRDP HWND %s (pid=%s)", hwnd, pid)
+        except Exception:
+            logger.debug("WM_CLOSE failed for FreeRDP pid=%s", pid, exc_info=True)

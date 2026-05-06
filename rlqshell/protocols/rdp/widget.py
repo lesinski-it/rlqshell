@@ -159,7 +159,6 @@ class RDPWidget(QWidget):
     """Status panel for the RDP tab while FreeRDP runs in its own window."""
 
     reconnect_requested = Signal()
-    rdp_fullscreen_requested = Signal()
 
     def __init__(
         self,
@@ -202,13 +201,6 @@ class RDPWidget(QWidget):
         self._focus_btn.setEnabled(False)
         btn_row.addWidget(self._focus_btn)
 
-        self._fs_btn = QPushButton("Pełny ekran", self)
-        self._fs_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._fs_btn.setStyleSheet(btn_style)
-        self._fs_btn.clicked.connect(self.rdp_fullscreen_requested.emit)
-        self._fs_btn.setEnabled(False)
-        btn_row.addWidget(self._fs_btn)
-
         btn_row.addStretch(1)
         layout.addLayout(btn_row)
         layout.addStretch(3)
@@ -230,7 +222,6 @@ class RDPWidget(QWidget):
     def set_connection(self, conn: RDPConnection) -> None:
         self._conn = conn
         self._focus_btn.setEnabled(False)
-        self._fs_btn.setEnabled(False)
         if sys.platform == "win32":
             self._discover_timer.start()
 
@@ -240,9 +231,7 @@ class RDPWidget(QWidget):
             self._fs_btn.setEnabled(False)
             return
         hwnd = _find_toplevel_for_pid(self._conn.pid)
-        enabled = hwnd is not None
-        self._focus_btn.setEnabled(enabled)
-        self._fs_btn.setEnabled(enabled)
+        self._focus_btn.setEnabled(hwnd is not None)
         if hwnd is None and not self._conn.is_connected:
             self._discover_timer.stop()
 
@@ -337,21 +326,21 @@ class RDPWidget(QWidget):
             connected = self._conn.is_connected
         title = "RDP " + ("connected" if connected else "session")
         subtitle = (
-            f"{host}\nRemote desktop runs in its own window\n"
-            "(use the button below to bring it to the front)"
+            f"{host}\nRemote desktop runs in its own window."
         ) if host else "Connecting..."
 
         title_font = QFont("JetBrains Mono", 18, QFont.Weight.Bold)
         sub_font = QFont("JetBrains Mono", 11)
 
+        h = self.height()
         painter.setPen(QColor("#cdd6f4"))
         painter.setFont(title_font)
-        title_rect = QRectF(0, self.height() / 2 - 110, self.width(), 36)
+        title_rect = QRectF(0, h * 0.08, self.width(), 40)
         painter.drawText(title_rect, Qt.AlignmentFlag.AlignCenter, title)
 
         painter.setPen(QColor("#a6adc8"))
         painter.setFont(sub_font)
-        sub_rect = QRectF(0, self.height() / 2 - 60, self.width(), 70)
+        sub_rect = QRectF(40, h * 0.18, self.width() - 80, 60)
         painter.drawText(
             sub_rect,
             Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop,

@@ -545,9 +545,6 @@ class ConnectionsPage(QWidget):
         conn.disconnected.connect(lambda tid=tab_id: self._on_disconnected(tid))
         conn.error.connect(lambda msg, tid=tab_id: self._on_error(tid, msg))
         container.reconnect_requested.connect(lambda tid=tab_id: self._reconnect_tab(tid))
-        rdp_widget.rdp_fullscreen_requested.connect(
-            lambda tid=tab_id: self._enter_fullscreen_rdp(tid),
-        )
 
         self._sessions[tab_id] = (container, conn)
         self._pool.add(tab_id, conn, host_id=host.id)
@@ -944,40 +941,6 @@ class ConnectionsPage(QWidget):
 
         container.show_overlay(f"Reconnecting to {host.address}:{host.rdp_port}...")
         asyncio.ensure_future(self._connect_async(tab_id, conn, host))
-
-    def _enter_fullscreen_rdp(self, tab_id: str) -> None:
-        """Reconnect the RDP session with /f + monitor resolution.
-
-        Uses a 3-second delay after closing the old session so the server has
-        time to fully process the disconnect before accepting a new fullscreen
-        connection — without this pause the second reconnect can arrive while
-        the server still has residual state from the previous session, resulting
-        in a transparent (un-rendered) fullscreen window.
-        """
-        if tab_id in self._reconnecting:
-            return
-        session = self._sessions.get(tab_id)
-        if session is None:
-            return
-        host_id = self._tab_host_ids.get(tab_id)
-        if host_id is None:
-            return
-        host = self._host_manager.get_host(host_id)
-        if host is None:
-            return
-
-        container, old_conn = session
-        try:
-            old_conn.close()
-        except Exception:
-            logger.exception("Error closing RDP for fullscreen switch, tab %s", tab_id)
-        self._pool.remove(tab_id)
-        self._reconnecting.add(tab_id)
-        container.show_overlay(f"Reconnecting to {host.address}:{host.rdp_port}...")
-        QTimer.singleShot(
-            3000,
-            lambda: self._reconnect_rdp(tab_id, container, host, fullscreen=True),
-        )
 
     # ------------------------------------------------------------------
     # Server monitoring
