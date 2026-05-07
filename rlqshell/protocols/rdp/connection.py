@@ -307,10 +307,17 @@ class RDPConnection(AbstractConnection):
                 args.append(f"/size:{size}")
         elif self._resolution == "dynamic":
             # Tryb dynamiczny: RDPEDISP dostosowuje rozdzielczość serwera do
-            # rozmiaru okna FreeRDP. Brak suwaków — obraz zawsze wypełnia okno.
-            # Floatbar fullscreen może powodować krótką chwilę złego wyświetlania
-            # podczas przejścia, ale jest to akceptowalne dla trybu dynamicznego.
+            # rozmiaru okna FreeRDP — brak suwaków, obraz zawsze wypełnia okno.
+            # /size: ustawiamy na rozdzielczość monitora, żeby serwer od razu
+            # startował w pełnym rozmiarze ekranu. Floatbar fullscreen działa
+            # natychmiastowo (serwer już jest w rozmiarze monitora). Drugie
+            # wejście w fullscreen po wyjściu przez floatbar może mieć krótkie
+            # przejście, ale RDPEDISP szybko przywraca właściwy rozmiar.
             args.append("/dynamic-resolution")
+            if sys.platform == "win32":
+                mon = _primary_monitor_resolution()
+                if mon:
+                    args.append(f"/size:{mon[0]}x{mon[1]}")
             if self._fullscreen:
                 args.append("/f")
         else:
