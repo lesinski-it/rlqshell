@@ -65,8 +65,9 @@ jobs:
           # with newer Python runtimes when abi3 wheels are needed.
           PYO3_USE_ABI3_FORWARD_COMPATIBILITY: "1"
         run: |
-          pip install -r requirements.txt
-          pip install pyinstaller
+          # Use the lock file for reproducible builds — exact versions pinned
+          # from the dev environment. pyinstaller is included in the lock file.
+          pip install -r requirements.lock
           python -c "import PySide6; print('PySide6 OK:', PySide6.__file__)"
 
       - name: Build EXE (PyInstaller)
