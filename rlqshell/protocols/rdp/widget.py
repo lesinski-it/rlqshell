@@ -79,8 +79,51 @@ if sys.platform == "win32":
     ]
     _user32.AttachThreadInput.restype = ctypes.c_bool
     _kernel32.GetCurrentThreadId.restype = ctypes.c_ulong
+    _user32.LoadImageW.argtypes = [
+        ctypes.c_void_p, ctypes.c_wchar_p, ctypes.c_uint,
+        ctypes.c_int, ctypes.c_int, ctypes.c_uint,
+    ]
+    _user32.LoadImageW.restype = ctypes.c_void_p
+    _user32.SendMessageW.argtypes = [
+        ctypes.c_void_p, ctypes.c_uint, ctypes.c_size_t, ctypes.c_ssize_t,
+    ]
+    _user32.SendMessageW.restype = ctypes.c_ssize_t
 
     _SW_RESTORE = 9
+    _WM_SETICON: int = 0x0080
+    _ICON_SMALL: int = 0
+    _ICON_BIG: int = 1
+    _IMAGE_ICON: int = 1
+    _LR_LOADFROMFILE: int = 0x0010
+
+    # Cached icon handles — loaded once, kept alive for the process lifetime.
+    _hicon_big: int | None = None
+    _hicon_small: int | None = None
+
+    def _load_app_icons() -> tuple[int | None, int | None]:
+        """Load RLQShell .ico and return (hicon_big, hicon_small) handles."""
+        global _hicon_big, _hicon_small
+        if _hicon_big is not None:
+            return _hicon_big, _hicon_small
+        try:
+            from rlqshell.app.constants import RESOURCES_DIR  # noqa: PLC0415
+            path = str(RESOURCES_DIR / "images" / "app_icon.ico")
+            flags = _LR_LOADFROMFILE
+            _hicon_big = _user32.LoadImageW(None, path, _IMAGE_ICON, 32, 32, flags) or None
+            _hicon_small = _user32.LoadImageW(None, path, _IMAGE_ICON, 16, 16, flags) or None
+        except Exception:
+            pass
+        return _hicon_big, _hicon_small
+
+    def _apply_app_icon(hwnd: int) -> None:
+        """Set the RLQShell icon on an external window via WM_SETICON."""
+        if not hwnd:
+            return
+        hbig, hsmall = _load_app_icons()
+        if hbig:
+            _user32.SendMessageW(hwnd, _WM_SETICON, _ICON_BIG, ctypes.c_ssize_t(hbig))
+        if hsmall or hbig:
+            _user32.SendMessageW(hwnd, _WM_SETICON, _ICON_SMALL, ctypes.c_ssize_t(hsmall or hbig))
 
     def _find_toplevel_for_pid(pid: int) -> int | None:
         """Return the largest visible top-level window for *pid*.
@@ -150,6 +193,9 @@ else:
     def _bring_window_to_front(hwnd: int) -> None:  # noqa: ARG001
         pass
 
+    def _apply_app_icon(hwnd: int) -> None:  # noqa: ARG001
+        pass
+
 
 # ---------------------------------------------------------------------------
 # RDPWidget
@@ -172,6 +218,7 @@ class RDPWidget(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_OpaquePaintEvent)
 
         self._conn: RDPConnection | None = None
+        self._icon_applied: bool = False
         self._overlay_text: str | None = None
         self._overlay_color = QColor("#a6adc8")
         self._bg_color = QColor("#1e1e2e")
@@ -222,6 +269,7 @@ class RDPWidget(QWidget):
     def set_connection(self, conn: RDPConnection) -> None:
         self._conn = conn
         self._focus_btn.setEnabled(False)
+        self._icon_applied = False
         if sys.platform == "win32":
             self._discover_timer.start()
 
@@ -231,6 +279,9 @@ class RDPWidget(QWidget):
             return
         hwnd = _find_toplevel_for_pid(self._conn.pid)
         self._focus_btn.setEnabled(hwnd is not None)
+        if hwnd is not None and not self._icon_applied:
+            self._icon_applied = True
+            _apply_app_icon(hwnd)
         if hwnd is None and not self._conn.is_connected:
             self._discover_timer.stop()
 
