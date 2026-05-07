@@ -53,8 +53,9 @@ CLAUDE.md
 docs/rlqshell-spec.md
 docs/build-linux-deb.md
 
-# Bundled FreeRDP binaries — fetched at build time by installer/fetch-freerdp.ps1
-installer/freerdp/
+# FreeRDP build artifacts (temp extraction dirs from fetch-freerdp.ps1)
+installer/freerdp/*.nupkg
+installer/freerdp/*.zip
 
 # Research / diagnostic scripts — not part of the production codebase
 scripts/poc_rdp_windows_mstscax.py
