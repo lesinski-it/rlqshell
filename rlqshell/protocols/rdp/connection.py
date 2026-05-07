@@ -334,9 +334,6 @@ class RDPConnection(AbstractConnection):
             if self._fullscreen:
                 args.append("/f")
 
-        # Floatbar provides in-session fullscreen toggle. show:always keeps it
-        # accessible in both windowed and fullscreen modes.
-        args.append("/floatbar:sticky:on,default:visible,show:always")
         if self._multimon:
             args.append("/multimon")
 
