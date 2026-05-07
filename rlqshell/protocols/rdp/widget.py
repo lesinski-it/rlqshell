@@ -228,7 +228,6 @@ class RDPWidget(QWidget):
     def _check_window_available(self) -> None:
         if self._conn is None or self._conn.pid is None:
             self._focus_btn.setEnabled(False)
-            self._fs_btn.setEnabled(False)
             return
         hwnd = _find_toplevel_for_pid(self._conn.pid)
         self._focus_btn.setEnabled(hwnd is not None)
