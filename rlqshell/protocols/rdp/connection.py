@@ -298,20 +298,25 @@ class RDPConnection(AbstractConnection):
             # Fullscreen na Windows: /f + rozdzielczość monitora bez /dynamic-resolution.
             # /dynamic-resolution celowo pominięte: przy wyjściu z fullscreena przez
             # floatbar FreeRDP wysyłałby RDPEDISP z rozmiarem okienkowym — serwer
-            # zmieniałby rozdzielczość i przy następnym /f reconneccie obraz byłby
-            # obcięty do rozmiaru okienkowego.
+            # zmieniałby rozdzielczość i przy następnym wejściu w fullscreen przez
+            # floatbar obraz byłby obcięty do rozmiaru okienkowego.
             args.append("/f")
             mon = _primary_monitor_resolution()
             size = f"{mon[0]}x{mon[1]}" if mon else self._resolution
             if size and "x" in size:
                 args.append(f"/size:{size}")
+        elif self._resolution == "dynamic":
+            # Tryb dynamiczny: RDPEDISP dostosowuje rozdzielczość serwera do
+            # rozmiaru okna FreeRDP. Brak suwaków — obraz zawsze wypełnia okno.
+            # Floatbar fullscreen może powodować krótką chwilę złego wyświetlania
+            # podczas przejścia, ale jest to akceptowalne dla trybu dynamicznego.
+            args.append("/dynamic-resolution")
+            if self._fullscreen:
+                args.append("/f")
         else:
-            # Windowed (lub non-Windows fullscreen): bez /dynamic-resolution.
-            # Używamy rozdzielczości monitora (nie konfiguracji hosta), żeby serwer
-            # od początku był w pełnym rozmiarze ekranu. Dzięki temu floatbar może
-            # przełączać fullscreen wielokrotnie bez wysyłania RDPEDISP resize —
-            # serwer zawsze zostaje przy rozdzielczości monitora i content zawsze
-            # wypełnia cały ekran w trybie fullscreen.
+            # Stała rozdzielczość: używamy rozdzielczości monitora (nie konfiguracji
+            # hosta) żeby serwer był zawsze w pełnym rozmiarze. Floatbar przełącza
+            # fullscreen wielokrotnie bez RDPEDISP — brak problemów z obcięciem.
             if sys.platform == "win32":
                 mon = _primary_monitor_resolution()
                 size = f"{mon[0]}x{mon[1]}" if mon else self._resolution
