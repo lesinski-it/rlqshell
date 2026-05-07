@@ -6,7 +6,7 @@
 
 *Your keys. Your cloud. Zero subscription.*
 
-[![Version](https://img.shields.io/badge/version-2.9.22-blue?style=flat-square)](https://update.lesinski.it/rlqshell/)
+[![Version](https://img.shields.io/badge/version-2.9.80-blue?style=flat-square)](https://update.lesinski.it/rlqshell/)
 [![License](https://img.shields.io/badge/license-MIT-green?style=flat-square)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.12+-blue?style=flat-square)](pyproject.toml)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-lightgrey?style=flat-square)]()
