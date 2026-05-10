@@ -1,4 +1,4 @@
-"""SFTP page — tabbed file browser sessions."""
+"""SFTP page — tabbed dual-pane file manager sessions."""
 
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ from rlqshell.core.models.host import Host
 from rlqshell.protocols.ssh.connection import SSHConnection
 from rlqshell.protocols.ssh.sftp_session import SFTPSession
 from rlqshell.ui.connections.tab_bar import ConnectionTabBar
-from rlqshell.ui.sftp.file_browser import FileBrowser
+from rlqshell.ui.sftp.dual_pane import DualPaneWidget
 from rlqshell.ui.sftp.transfer_queue import TransferQueue
 from rlqshell.ui.widgets.empty_state import EmptyState
 from rlqshell.ui.widgets.toast import ToastManager
@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 
 
 class SFTPPage(QWidget):
-    """Page managing tabbed SFTP sessions."""
+    """Page managing tabbed dual-pane SFTP sessions."""
 
     new_session_requested = Signal()
     session_count_changed = Signal(int)
@@ -64,7 +64,7 @@ class SFTPPage(QWidget):
         self._tab_bar.new_tab_requested.connect(self.new_session_requested.emit)
         layout.addWidget(self._tab_bar)
 
-        # Browser stack
+        # Dual-pane stack
         self._browser_stack = QStackedWidget()
         layout.addWidget(self._browser_stack, 1)
 
@@ -76,43 +76,31 @@ class SFTPPage(QWidget):
         )
         self._browser_stack.addWidget(self._empty_state)
 
-        # Transfer queue
+        # Transfer queue (shared across all sessions)
         self._transfer_queue = TransferQueue()
         self._transfer_queue.upload_completed.connect(self._on_upload_completed)
+        self._transfer_queue.download_completed.connect(self._on_download_completed)
         layout.addWidget(self._transfer_queue)
 
-        # Track sessions: tab_id → (browser, sftp_session, ssh_connection, owns_conn)
-        # owns_conn=True means this session created the SSH connection and is responsible for closing it
-        self._sessions: dict[str, tuple[FileBrowser, SFTPSession, SSHConnection, bool]] = {}
+        # tab_id → (dual_pane, sftp_session, ssh_connection, owns_conn)
+        self._sessions: dict[str, tuple[DualPaneWidget, SFTPSession, SSHConnection, bool]] = {}
 
     def open_sftp_session(self, host_id: int) -> None:
-        """Open a new SFTP session to the given host."""
+        """Open a new dual-pane SFTP session to the given host."""
         try:
             host = self._host_manager.get_host(host_id)
             if host is None:
                 logger.error("Host %d not found", host_id)
                 return
-
             tab_id = str(uuid.uuid4())[:8]
             label = host.label or host.address
-
-            asyncio.ensure_future(
-                self._open_sftp_async(tab_id, label, host)
-            )
+            asyncio.ensure_future(self._open_sftp_async(tab_id, label, host))
         except Exception:
             logger.exception("Failed to schedule SFTP session for host %d", host_id)
             ToastManager.instance().show_toast("Failed to open SFTP session.")
 
-    async def _open_sftp_async(
-        self,
-        tab_id: str,
-        label: str,
-        host: Host,
-    ) -> None:
+    async def _open_sftp_async(self, tab_id: str, label: str, host: Host) -> None:
         try:
-            # Only reuse connections from other SFTP sessions (same lifecycle).
-            # Never borrow from terminal connections — closing the terminal would
-            # kill the transport and break this SFTP session.
             sftp_conn = self._find_sftp_session_connection(host)
             if sftp_conn:
                 conn = sftp_conn
@@ -128,35 +116,32 @@ class SFTPPage(QWidget):
             sftp = SFTPSession(conn.transport)
             await sftp.open()
 
-            browser = FileBrowser(sftp)
-            browser.transfer_requested.connect(
-                lambda d, l, r: self._transfer_queue.add_transfer(sftp, d, l, r)
+            dual = DualPaneWidget(sftp, label)
+            dual.transfer_requested.connect(
+                lambda d, loc, r: self._transfer_queue.add_transfer(sftp, d, loc, r)
             )
-            self._browser_stack.addWidget(browser)
+            self._browser_stack.addWidget(dual)
 
-            self._sessions[tab_id] = (browser, sftp, conn, owns_conn)
+            self._sessions[tab_id] = (dual, sftp, conn, owns_conn)
 
-            self._tab_bar.add_tab(tab_id, label, protocol="SFTP", color=host.color_label, show_fullscreen=False)
-            self._browser_stack.setCurrentWidget(browser)
+            self._tab_bar.add_tab(
+                tab_id, label, protocol="SFTP", color=host.color_label, show_fullscreen=False
+            )
+            self._browser_stack.setCurrentWidget(dual)
             self.session_count_changed.emit(len(self._sessions))
 
-            await browser.navigate()
+            await dual.navigate_remote()
             logger.info("SFTP session opened: %s", label)
 
             if self._history:
-                rec_id = self._history.record_connect(
-                    host.id, label, host.address, "sftp",
-                )
+                rec_id = self._history.record_connect(host.id, label, host.address, "sftp")
                 self._history_records[tab_id] = rec_id
 
         except Exception as exc:
             logger.exception("Failed to open SFTP for %s", label)
-            ToastManager.instance().show_toast(
-                f"SFTP connection failed: {exc}",
-            )
+            ToastManager.instance().show_toast(f"SFTP connection failed: {exc}")
 
     async def _create_ssh_connection(self, host: Host) -> SSHConnection:
-        """Create a fresh SSH connection for SFTP (no shell channel needed)."""
         password, pkey = self._resolve_credentials(host)
         conn = SSHConnection(
             hostname=host.address,
@@ -200,14 +185,18 @@ class SFTPPage(QWidget):
         return getpass.getuser()
 
     def _on_upload_completed(self, sftp: SFTPSession) -> None:
-        """Refresh the browser that owns the completed upload's SFTP session."""
-        for browser, session, *_ in self._sessions.values():
+        for dual, session, *_ in self._sessions.values():
             if session is sftp:
-                asyncio.ensure_future(browser.navigate())
+                dual.refresh_remote()
+                break
+
+    def _on_download_completed(self, sftp: SFTPSession) -> None:
+        for dual, session, *_ in self._sessions.values():
+            if session is sftp:
+                dual.refresh_local()
                 break
 
     def _find_sftp_session_connection(self, host: Host) -> SSHConnection | None:
-        """Find an existing SSH connection already used by another SFTP session."""
         for _, _, conn, _ in self._sessions.values():
             if (
                 conn.is_connected
@@ -220,11 +209,10 @@ class SFTPPage(QWidget):
     def _on_tab_selected(self, tab_id: str) -> None:
         session = self._sessions.get(tab_id)
         if session:
-            browser, *_ = session
-            self._browser_stack.setCurrentWidget(browser)
+            dual, *_ = session
+            self._browser_stack.setCurrentWidget(dual)
 
     def _on_tab_close(self, tab_id: str) -> None:
-        # Confirm before closing
         confirm = self._config.get("general.confirm_close_tab", True) if self._config else True
         if confirm and tab_id in self._sessions:
             info = self._tab_bar.tab_info(tab_id)
@@ -252,15 +240,15 @@ class SFTPPage(QWidget):
 
         session = self._sessions.pop(tab_id, None)
         if session:
-            browser, sftp, conn, owns_conn = session
+            dual, sftp, conn, owns_conn = session
             asyncio.ensure_future(sftp.close())
-            self._browser_stack.removeWidget(browser)
-            browser.deleteLater()
-            # Close the SSH connection only if we own it and no other tab is using it
+            self._browser_stack.removeWidget(dual)
+            dual.deleteLater()
             if owns_conn:
                 still_used = any(s[2] is conn for s in self._sessions.values())
                 if not still_used:
                     conn.close()
+
         self._tab_bar.remove_tab(tab_id)
         self.session_count_changed.emit(len(self._sessions))
 

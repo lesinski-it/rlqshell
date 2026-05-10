@@ -100,6 +100,7 @@ class _TransferItem(QWidget):
         self._status.setText(text)
 
     def mark_complete(self) -> None:
+        self._finished = True
         self._progress.setValue(100)
         self._status.setText("Done")
         self._status.setStyleSheet(
@@ -107,6 +108,7 @@ class _TransferItem(QWidget):
         )
 
     def mark_cancelled(self) -> None:
+        self._finished = True
         self._status.setText("Cancelled")
         self._status.setStyleSheet(
             f"font-size: 11px; color: {Colors.WARNING}; background: transparent;"
@@ -120,7 +122,12 @@ class _TransferItem(QWidget):
     def is_cancelled(self) -> bool:
         return self._cancelled.is_set()
 
+    @property
+    def is_finished(self) -> bool:
+        return getattr(self, "_finished", False)
+
     def mark_error(self, msg: str = "Error") -> None:
+        self._finished = True
         self._status.setText(msg)
         self._status.setStyleSheet(
             f"font-size: 11px; color: {Colors.DANGER}; background: transparent;"
@@ -130,7 +137,8 @@ class _TransferItem(QWidget):
 class TransferQueue(QWidget):
     """Collapsible panel showing active transfers."""
 
-    upload_completed = Signal(object)  # SFTPSession — emitted after successful upload
+    upload_completed = Signal(object)    # SFTPSession — emitted after last upload finishes
+    download_completed = Signal(object)  # SFTPSession — emitted after each download finishes
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -300,7 +308,9 @@ class TransferQueue(QWidget):
                     else:
                         await sftp.upload(local_path, remote_path, _progress)
                     item.mark_complete()
-                    if direction == "upload":
+                    if direction == "download":
+                        self.download_completed.emit(sftp)
+                    elif direction == "upload":
                         session_key = id(sftp)
                         self._pending_uploads[session_key] = max(0, self._pending_uploads.get(session_key, 1) - 1)
                         if self._pending_uploads[session_key] == 0:
@@ -352,8 +362,7 @@ class TransferQueue(QWidget):
     def _clear_completed(self) -> None:
         for tid in list(self._transfers):
             item = self._transfers[tid]
-            status = item._status.text() or ""
-            if item._progress.value() == 100 or "Error" in status or status == "Cancelled":
+            if item.is_finished or item.is_cancelled:
                 self._list_layout.removeWidget(item)
                 item.deleteLater()
                 del self._transfers[tid]

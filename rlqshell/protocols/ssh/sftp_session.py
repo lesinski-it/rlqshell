@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import stat
 from dataclasses import dataclass
 from datetime import datetime
@@ -30,12 +31,29 @@ class FileEntry:
 
 
 class SFTPSession:
-    """Async wrapper around paramiko.SFTPClient."""
+    """Async wrapper around paramiko.SFTPClient.
+
+    Paramiko is not thread-safe, so all operations are serialised through
+    ``_lock`` — only one executor call runs at a time per session.  This
+    prevents race conditions when both the TransferQueue and directory-copy
+    helpers use the same session concurrently.
+    """
 
     def __init__(self, transport: paramiko.Transport) -> None:
         self._transport = transport
         self._sftp: paramiko.SFTPClient | None = None
         self._cwd = "/"
+        self._lock = asyncio.Lock()
+
+    # ── Internal helper ───────────────────────────────────────────────────────
+
+    async def _run(self, fn, *args):
+        """Run a blocking paramiko call under the session lock."""
+        async with self._lock:
+            loop = asyncio.get_running_loop()
+            return await loop.run_in_executor(None, fn, *args)
+
+    # ── Lifecycle ─────────────────────────────────────────────────────────────
 
     @property
     def cwd(self) -> str:
@@ -47,15 +65,16 @@ class SFTPSession:
 
     async def open(self) -> None:
         """Open the SFTP channel."""
-        loop = asyncio.get_running_loop()
-        self._sftp = await loop.run_in_executor(
-            None, paramiko.SFTPClient.from_transport, self._transport
-        )
-        if self._sftp:
-            try:
-                self._cwd = await loop.run_in_executor(None, self._sftp.normalize, ".")
-            except Exception:
-                self._cwd = "/"
+        async with self._lock:
+            loop = asyncio.get_running_loop()
+            self._sftp = await loop.run_in_executor(
+                None, paramiko.SFTPClient.from_transport, self._transport
+            )
+            if self._sftp:
+                try:
+                    self._cwd = await loop.run_in_executor(None, self._sftp.normalize, ".")
+                except Exception:
+                    self._cwd = "/"
         logger.info("SFTP session opened, cwd=%s", self._cwd)
 
     async def close(self) -> None:
@@ -63,16 +82,16 @@ class SFTPSession:
             self._sftp.close()
             self._sftp = None
 
+    # ── Directory operations ──────────────────────────────────────────────────
+
     async def list_dir(self, path: str | None = None) -> list[FileEntry]:
         """List directory contents."""
         if self._sftp is None:
             return []
 
         target = path or self._cwd
-        loop = asyncio.get_running_loop()
-
-        attrs_list: list[paramiko.SFTPAttributes] = await loop.run_in_executor(
-            None, self._sftp.listdir_attr, target
+        attrs_list: list[paramiko.SFTPAttributes] = await self._run(
+            self._sftp.listdir_attr, target
         )
 
         entries: list[FileEntry] = []
@@ -84,11 +103,7 @@ class SFTPSession:
             full_path = str(PurePosixPath(target) / name)
             is_dir = stat.S_ISDIR(attr.st_mode) if attr.st_mode else False
             is_link = stat.S_ISLNK(attr.st_mode) if attr.st_mode else False
-
-            mtime = None
-            if attr.st_mtime:
-                mtime = datetime.fromtimestamp(attr.st_mtime)
-
+            mtime = datetime.fromtimestamp(attr.st_mtime) if attr.st_mtime else None
             perms = self._format_permissions(attr.st_mode) if attr.st_mode else ""
 
             entries.append(FileEntry(
@@ -103,7 +118,6 @@ class SFTPSession:
                 group=str(attr.st_gid or ""),
             ))
 
-        # Sort: directories first, then alphabetical
         entries.sort(key=lambda e: (not e.is_dir, e.name.lower()))
         return entries
 
@@ -112,11 +126,40 @@ class SFTPSession:
         if self._sftp is None:
             return self._cwd
 
-        loop = asyncio.get_running_loop()
         new_path = str(PurePosixPath(self._cwd) / path) if not path.startswith("/") else path
-        normalized = await loop.run_in_executor(None, self._sftp.normalize, new_path)
+        normalized = await self._run(self._sftp.normalize, new_path)
         self._cwd = normalized
         return self._cwd
+
+    async def mkdir(self, path: str) -> None:
+        """Create a remote directory."""
+        if self._sftp is None:
+            raise RuntimeError("SFTP not connected")
+
+        full_path = str(PurePosixPath(self._cwd) / path) if not path.startswith("/") else path
+        await self._run(self._sftp.mkdir, full_path)
+        logger.info("Created directory: %s", full_path)
+
+    async def rmdir(self, path: str) -> None:
+        """Delete a remote directory."""
+        if self._sftp is None:
+            raise RuntimeError("SFTP not connected")
+
+        await self._run(self._sftp.rmdir, path)
+        logger.info("Removed directory: %s", path)
+
+    async def rmdir_recursive(self, path: str) -> None:
+        """Recursively delete a remote directory and all its contents."""
+        entries = await self.list_dir(path)
+        for entry in entries:
+            if entry.is_dir:
+                await self.rmdir_recursive(entry.path)
+            else:
+                await self.delete(entry.path)
+        await self.rmdir(path)
+        logger.info("Removed directory tree: %s", path)
+
+    # ── File operations ───────────────────────────────────────────────────────
 
     async def download(
         self,
@@ -128,12 +171,24 @@ class SFTPSession:
         if self._sftp is None:
             raise RuntimeError("SFTP not connected")
 
-        loop = asyncio.get_running_loop()
-        await loop.run_in_executor(
-            None, self._sftp.get, remote_path, local_path,
-            progress_callback,
-        )
-        logger.info("Downloaded %s → %s", remote_path, local_path)
+        sftp = self._sftp
+
+        def _get() -> None:
+            try:
+                sftp.get(remote_path, local_path, progress_callback)
+            except PermissionError:
+                # paramiko calls os.chmod() after download; on Windows NTFS
+                # this may raise PermissionError even though the file was written.
+                if os.path.exists(local_path):
+                    logger.debug("Post-download chmod failed (Windows): %s", local_path)
+                else:
+                    raise
+
+        async with self._lock:
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(None, _get)
+
+        logger.info("Downloaded %s -> %s", remote_path, local_path)
 
     async def upload(
         self,
@@ -145,80 +200,60 @@ class SFTPSession:
         if self._sftp is None:
             raise RuntimeError("SFTP not connected")
 
-        loop = asyncio.get_running_loop()
-        await loop.run_in_executor(
-            None, self._sftp.put, local_path, remote_path,
-            progress_callback,
-        )
-        logger.info("Uploaded %s → %s", local_path, remote_path)
-
-    async def mkdir(self, path: str) -> None:
-        """Create a remote directory."""
-        if self._sftp is None:
-            raise RuntimeError("SFTP not connected")
-
-        loop = asyncio.get_running_loop()
-        full_path = str(PurePosixPath(self._cwd) / path) if not path.startswith("/") else path
-        await loop.run_in_executor(None, self._sftp.mkdir, full_path)
-        logger.info("Created directory: %s", full_path)
+        await self._run(self._sftp.put, local_path, remote_path, progress_callback)
+        logger.info("Uploaded %s -> %s", local_path, remote_path)
 
     async def delete(self, path: str) -> None:
         """Delete a remote file."""
         if self._sftp is None:
             raise RuntimeError("SFTP not connected")
 
-        loop = asyncio.get_running_loop()
-        await loop.run_in_executor(None, self._sftp.remove, path)
+        await self._run(self._sftp.remove, path)
         logger.info("Deleted: %s", path)
-
-    async def rmdir(self, path: str) -> None:
-        """Delete a remote directory."""
-        if self._sftp is None:
-            raise RuntimeError("SFTP not connected")
-
-        loop = asyncio.get_running_loop()
-        await loop.run_in_executor(None, self._sftp.rmdir, path)
-        logger.info("Removed directory: %s", path)
 
     async def rename(self, old_path: str, new_path: str) -> None:
         """Rename a remote file or directory."""
         if self._sftp is None:
             raise RuntimeError("SFTP not connected")
 
-        loop = asyncio.get_running_loop()
-        await loop.run_in_executor(None, self._sftp.rename, old_path, new_path)
-        logger.info("Renamed %s → %s", old_path, new_path)
+        await self._run(self._sftp.rename, old_path, new_path)
+        logger.info("Renamed %s -> %s", old_path, new_path)
 
     async def read_file(self, remote_path: str, max_size: int = 5 * 1024 * 1024) -> bytes:
         """Read a remote file into memory. Raises ValueError if file exceeds max_size."""
         if self._sftp is None:
             raise RuntimeError("SFTP not connected")
 
-        loop = asyncio.get_running_loop()
-        attrs = await loop.run_in_executor(None, self._sftp.stat, remote_path)
-        if attrs.st_size and attrs.st_size > max_size:
-            raise ValueError(
-                f"File too large ({attrs.st_size} bytes, max {max_size})"
-            )
+        sftp = self._sftp
 
-        def _read():
-            with self._sftp.open(remote_path, "rb") as f:
+        def _read() -> bytes:
+            attrs = sftp.stat(remote_path)
+            if attrs.st_size and attrs.st_size > max_size:
+                raise ValueError(
+                    f"File too large ({attrs.st_size} bytes, max {max_size})"
+                )
+            with sftp.open(remote_path, "rb") as f:
                 return f.read()
 
-        return await loop.run_in_executor(None, _read)
+        async with self._lock:
+            loop = asyncio.get_running_loop()
+            return await loop.run_in_executor(None, _read)
 
     async def write_file(self, remote_path: str, data: bytes) -> None:
         """Write data to a remote file."""
         if self._sftp is None:
             raise RuntimeError("SFTP not connected")
 
-        loop = asyncio.get_running_loop()
+        sftp = self._sftp
 
-        def _write():
-            with self._sftp.open(remote_path, "wb") as f:
+        def _write() -> None:
+            with sftp.open(remote_path, "wb") as f:
                 f.write(data)
 
-        await loop.run_in_executor(None, _write)
+        async with self._lock:
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(None, _write)
+
         logger.info("Written %d bytes to %s", len(data), remote_path)
 
     async def stat(self, path: str) -> paramiko.SFTPAttributes | None:
@@ -226,11 +261,18 @@ class SFTPSession:
         if self._sftp is None:
             return None
 
-        loop = asyncio.get_running_loop()
         try:
-            return await loop.run_in_executor(None, self._sftp.stat, path)
+            return await self._run(self._sftp.stat, path)
         except FileNotFoundError:
             return None
+
+    async def chmod(self, path: str, mode: int) -> None:
+        """Change permissions of a remote file or directory."""
+        if self._sftp is None:
+            raise RuntimeError("SFTP not connected")
+
+        await self._run(self._sftp.chmod, path, mode)
+        logger.info("chmod %o %s", mode, path)
 
     @staticmethod
     def _format_permissions(mode: int) -> str:

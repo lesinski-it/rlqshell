@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QMimeData, Qt, Signal
+from PySide6.QtGui import QDrag
 from PySide6.QtWidgets import (
     QFileDialog,
     QHBoxLayout,
@@ -24,19 +26,88 @@ from rlqshell.protocols.ssh.sftp_session import FileEntry, SFTPSession
 
 logger = logging.getLogger(__name__)
 
+_SFTP_MIME = "application/x-rlqshell-sftp-paths"
+
 
 def _human_size(size: int) -> str:
     for unit in ("B", "KB", "MB", "GB", "TB"):
         if abs(size) < 1024:
-            return f"{size:.1f} {unit}" if unit != "B" else f"{size} {unit}"
+            return f"{size:.1f} {unit}" if unit != "B" else f"{size} B"
         size /= 1024  # type: ignore[assignment]
     return f"{size:.1f} PB"
+
+
+class _RemoteTable(QTableWidget):
+    """Table widget with drag/drop support for remote SFTP files."""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._drag_start_pos = None
+        self.setAcceptDrops(True)
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._drag_start_pos = event.pos()
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event) -> None:  # noqa: N802
+        if (
+            event.buttons() & Qt.MouseButton.LeftButton
+            and self._drag_start_pos is not None
+        ):
+            from PySide6.QtCore import QPoint
+            delta: QPoint = event.pos() - self._drag_start_pos
+            if delta.manhattanLength() > 10:
+                self._drag_start_pos = None
+                self._start_drag()
+                return
+        super().mouseMoveEvent(event)
+
+    def _start_drag(self) -> None:
+        paths = [
+            item.data(Qt.ItemDataRole.UserRole).path
+            for item in self.selectedItems()
+            if item.column() == 0 and item.data(Qt.ItemDataRole.UserRole) is not None
+        ]
+        if not paths:
+            return
+        mime = QMimeData()
+        mime.setData(_SFTP_MIME, json.dumps(paths).encode())
+        drag = QDrag(self)
+        drag.setMimeData(mime)
+        drag.exec(Qt.DropAction.CopyAction)
+
+    def dragEnterEvent(self, event) -> None:  # noqa: N802
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dragMoveEvent(self, event) -> None:  # noqa: N802
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dropEvent(self, event) -> None:  # noqa: N802
+        if event.mimeData().hasUrls():
+            paths = [url.toLocalFile() for url in event.mimeData().urls() if url.isLocalFile()]
+            browser = self.parent()
+            while browser and not isinstance(browser, FileBrowser):
+                browser = browser.parent()
+            if isinstance(browser, FileBrowser):
+                browser.local_drop_requested.emit(paths)
+            event.acceptProposedAction()
+        else:
+            event.ignore()
 
 
 class FileBrowser(QWidget):
     """Single SFTP session file browser."""
 
     transfer_requested = Signal(str, str, str)  # direction, local, remote
+    local_drop_requested = Signal(list)          # list[str] local paths dropped onto remote panel
+    focused = Signal()
 
     def __init__(self, sftp: SFTPSession, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -59,7 +130,6 @@ class FileBrowser(QWidget):
         tb_layout.setContentsMargins(12, 6, 12, 6)
         tb_layout.setSpacing(8)
 
-        # Navigation buttons
         self._back_btn = QPushButton("..")
         self._back_btn.setFixedSize(28, 28)
         self._back_btn.setToolTip("Go to parent directory")
@@ -79,7 +149,6 @@ class FileBrowser(QWidget):
         self._refresh_btn.clicked.connect(self._refresh)
         tb_layout.addWidget(self._refresh_btn)
 
-        # Breadcrumb / path display
         self._path_label = QLabel("/")
         self._path_label.setStyleSheet(
             f"font-size: 12px; font-family: 'JetBrains Mono', monospace; "
@@ -87,7 +156,6 @@ class FileBrowser(QWidget):
         )
         tb_layout.addWidget(self._path_label, 1)
 
-        # Actions
         mkdir_btn = QPushButton("New Folder")
         mkdir_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         mkdir_btn.clicked.connect(self._on_mkdir)
@@ -106,13 +174,17 @@ class FileBrowser(QWidget):
         layout.addWidget(toolbar)
 
         # File table
-        self._table = QTableWidget()
+        self._table = _RemoteTable(self)
         self._table.setColumnCount(4)
         self._table.setHorizontalHeaderLabels(["Name", "Size", "Modified", "Permissions"])
         self._table.horizontalHeader().setStretchLastSection(True)
         self._table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        self._table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
-        self._table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        self._table.horizontalHeader().setSectionResizeMode(
+            1, QHeaderView.ResizeMode.ResizeToContents
+        )
+        self._table.horizontalHeader().setSectionResizeMode(
+            2, QHeaderView.ResizeMode.ResizeToContents
+        )
         self._table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self._table.setSelectionMode(QTableWidget.SelectionMode.ExtendedSelection)
         self._table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
@@ -124,6 +196,14 @@ class FileBrowser(QWidget):
         self._table.setStyleSheet(
             f"QTableWidget {{ gridline-color: {Colors.BORDER}; }}"
         )
+        # Emit focused when user clicks the table
+        original_mouse_press = self._table.mousePressEvent
+
+        def _mouse_press_with_focus(event):
+            self.focused.emit()
+            original_mouse_press(event)
+
+        self._table.mousePressEvent = _mouse_press_with_focus
         layout.addWidget(self._table)
 
     async def navigate(self, path: str | None = None) -> None:
@@ -155,7 +235,6 @@ class FileBrowser(QWidget):
         self._table.setRowCount(len(visible))
 
         for row, entry in enumerate(visible):
-            # Name
             icon = "📁 " if entry.is_dir else "📄 "
             name_item = QTableWidgetItem(icon + entry.name)
             name_item.setData(Qt.ItemDataRole.UserRole, entry)
@@ -163,20 +242,17 @@ class FileBrowser(QWidget):
                 name_item.setForeground(QLabel().palette().text().color())
             self._table.setItem(row, 0, name_item)
 
-            # Size
             size_text = "" if entry.is_dir else _human_size(entry.size)
             self._table.setItem(row, 1, QTableWidgetItem(size_text))
 
-            # Modified
             mtime = entry.modified.strftime("%Y-%m-%d %H:%M") if entry.modified else ""
             self._table.setItem(row, 2, QTableWidgetItem(mtime))
 
-            # Permissions
             self._table.setItem(row, 3, QTableWidgetItem(entry.permissions))
 
     def _on_table_key_press(self, event) -> None:
         if event.key() == Qt.Key.Key_Delete:
-            entries = self._selected_entries()
+            entries = self.selected_entries()
             if entries:
                 self._delete_entries(entries)
         else:
@@ -228,7 +304,7 @@ class FileBrowser(QWidget):
                 remote = f"{self._sftp.cwd}/{filename}"
                 self.transfer_requested.emit("upload", local, remote)
 
-    def _selected_entries(self) -> list[FileEntry]:
+    def selected_entries(self) -> list[FileEntry]:
         """Return all currently selected entries."""
         seen_rows: set[int] = set()
         entries: list[FileEntry] = []
@@ -251,7 +327,7 @@ class FileBrowser(QWidget):
         if not name_item:
             return
         entry: FileEntry = name_item.data(Qt.ItemDataRole.UserRole)
-        selected = self._selected_entries()
+        selected = self.selected_entries()
         multi = len(selected) > 1
 
         menu = QMenu(self)
@@ -268,6 +344,10 @@ class FileBrowser(QWidget):
         if not multi:
             rename_action = menu.addAction("Rename")
             rename_action.triggered.connect(lambda: self._rename_entry(entry))
+
+            perm_action = menu.addAction("Permissions…")
+            perm_action.triggered.connect(lambda: self._chmod_entry(entry))
+
             menu.addSeparator()
 
         del_label = f"Delete ({len(selected)})" if multi else "Delete"
@@ -277,18 +357,15 @@ class FileBrowser(QWidget):
         menu.exec(self._table.viewport().mapToGlobal(pos))
 
     def _show_error(self, message: str) -> None:
-        """Show an error toast notification."""
         from rlqshell.ui.widgets.toast import ToastManager
 
         ToastManager.instance().show_toast(message, "error", duration_ms=5000)
 
     def _edit_file(self, entry: FileEntry) -> None:
-        """Open a remote file in the text editor dialog."""
         from rlqshell.ui.sftp.text_editor import RemoteTextEditor
 
         editor = RemoteTextEditor(self._sftp, entry.path, parent=self.window())
         editor.exec()
-        # Refresh listing in case file was modified
         asyncio.ensure_future(self.navigate())
 
     def _download_file(self, entry: FileEntry) -> None:
@@ -297,14 +374,14 @@ class FileBrowser(QWidget):
             self.transfer_requested.emit("download", local, entry.path)
 
     def _rename_entry(self, entry: FileEntry) -> None:
+        from pathlib import PurePosixPath
+
         from PySide6.QtWidgets import QInputDialog
 
         new_name, ok = QInputDialog.getText(
             self, "Rename", "New name:", text=entry.name
         )
         if ok and new_name.strip() and new_name != entry.name:
-            from pathlib import PurePosixPath
-
             parent = str(PurePosixPath(entry.path).parent)
             new_path = f"{parent}/{new_name.strip()}"
             asyncio.ensure_future(self._do_rename(entry.path, new_path))
@@ -318,6 +395,21 @@ class FileBrowser(QWidget):
         except Exception as exc:
             logger.exception("Rename failed: %s → %s", old_path, new_path)
             self._show_error(f"Rename failed: {exc}")
+
+    def _chmod_entry(self, entry: FileEntry) -> None:
+        asyncio.ensure_future(self._open_chmod_dialog(entry))
+
+    async def _open_chmod_dialog(self, entry: FileEntry) -> None:
+        from rlqshell.ui.sftp.chmod_dialog import ChmodDialog
+
+        try:
+            attrs = await self._sftp.stat(entry.path)
+            mode = attrs.st_mode if attrs and attrs.st_mode else 0o644
+            dialog = ChmodDialog(self._sftp, entry.path, mode, parent=self.window())
+            if dialog.exec():
+                await self.navigate()
+        except Exception as exc:
+            self._show_error(f"Cannot open permissions dialog: {exc}")
 
     def _delete_entries(self, entries: list[FileEntry]) -> None:
         from PySide6.QtWidgets import QMessageBox
