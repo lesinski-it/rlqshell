@@ -38,10 +38,12 @@ class ChmodDialog(QDialog):
         path: str,
         current_mode: int,
         parent: QWidget | None = None,
+        refresh_fn=None,
     ) -> None:
         super().__init__(parent)
         self._sftp = sftp
         self._path = path
+        self._refresh_fn = refresh_fn
         self._updating = False
 
         self.setWindowTitle("Permissions")
@@ -138,10 +140,7 @@ class ChmodDialog(QDialog):
 
     def _apply(self) -> None:
         mode = self._current_mode()
-        asyncio.ensure_future(self._do_chmod_and_close(mode))
-
-    async def _do_chmod_and_close(self, mode: int) -> None:
-        await self._do_chmod(mode)
+        asyncio.ensure_future(self._do_chmod(mode))
         self.accept()
 
     async def _do_chmod(self, mode: int) -> None:
@@ -152,6 +151,8 @@ class ChmodDialog(QDialog):
             ToastManager.instance().show_toast(
                 f"Permissions changed to {mode:04o}", "success", duration_ms=3000
             )
+            if self._refresh_fn is not None:
+                await self._refresh_fn()
         except PermissionError:
             ToastManager.instance().show_toast("Permission denied", "error", duration_ms=5000)
         except Exception as exc:

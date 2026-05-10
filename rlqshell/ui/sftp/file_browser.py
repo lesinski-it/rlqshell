@@ -405,9 +405,12 @@ class FileBrowser(QWidget):
         try:
             attrs = await self._sftp.stat(entry.path)
             mode = attrs.st_mode if attrs and attrs.st_mode else 0o644
-            dialog = ChmodDialog(self._sftp, entry.path, mode, parent=self.window())
-            if dialog.exec():
-                await self.navigate()
+            dialog = ChmodDialog(
+                self._sftp, entry.path, mode,
+                parent=self.window(),
+                refresh_fn=self.navigate,
+            )
+            dialog.exec()
         except Exception as exc:
             self._show_error(f"Cannot open permissions dialog: {exc}")
 
@@ -431,7 +434,7 @@ class FileBrowser(QWidget):
         for entry in entries:
             try:
                 if entry.is_dir:
-                    await self._sftp.rmdir(entry.path)
+                    await self._sftp.rmdir_recursive(entry.path)
                 else:
                     await self._sftp.delete(entry.path)
             except PermissionError:
