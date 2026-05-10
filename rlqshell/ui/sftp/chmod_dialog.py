@@ -138,7 +138,10 @@ class ChmodDialog(QDialog):
 
     def _apply(self) -> None:
         mode = self._current_mode()
-        asyncio.ensure_future(self._do_chmod(mode))
+        asyncio.ensure_future(self._do_chmod_and_close(mode))
+
+    async def _do_chmod_and_close(self, mode: int) -> None:
+        await self._do_chmod(mode)
         self.accept()
 
     async def _do_chmod(self, mode: int) -> None:
