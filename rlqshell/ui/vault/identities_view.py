@@ -252,12 +252,28 @@ class IdentitiesView(QWidget):
         edit_action = menu.addAction("Edit")
         edit_action.triggered.connect(lambda: self._on_edit_identity(identity_id))
 
+        identity = self._store.get_identity(identity_id)
+        if (
+            identity is not None
+            and self._store.is_unlocked
+            and identity.auth_type in ("password", "key+passphrase")
+            and identity.encrypted_password is not None
+        ):
+            view_pwd_action = menu.addAction("View Password")
+            view_pwd_action.triggered.connect(lambda: self._on_view_password(identity))
+
         menu.addSeparator()
 
         delete_action = menu.addAction("Delete")
         delete_action.triggered.connect(lambda: self._delete_identity(identity_id))
 
         menu.exec(pos)
+
+    def _on_view_password(self, identity: Identity) -> None:
+        from rlqshell.ui.vault.password_view_dialog import PasswordViewDialog
+
+        dlg = PasswordViewDialog(self._store, identity, parent=self)
+        dlg.exec()
 
     def _delete_identity(self, identity_id: int) -> None:
         if not self._require_unlocked():
