@@ -1121,7 +1121,9 @@ class TerminalWidget(QWidget):
 
             dlg = PasteConfirmDialog(text, parent=self)
             if dlg.exec() == PasteConfirmDialog.Accepted:
-                self.input_ready.emit(text.encode("utf-8"))
+                # SSH PTY expects \r (as Enter key does); normalize \r\n and bare \n
+                normalized = text.replace("\r\n", "\r").replace("\n", "\r")
+                self.input_ready.emit(normalized.encode("utf-8"))
 
     def _cut_selection(self) -> None:
         """Copy selected text and send backspace for each character (simulated cut)."""
