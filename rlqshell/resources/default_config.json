@@ -20,6 +20,7 @@
         "language": "en",
         "confirm_close_app": true,
         "confirm_close_tab": true,
+        "close_to_tray": false,
         "auto_save": true,
         "auto_save_interval": 1000,
         "startup_page": "vault"
