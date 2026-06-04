@@ -130,6 +130,13 @@ class PrivateKeyExportDialog(QDialog):
 
         layout.addWidget(self._context_header())
 
+        desc = QLabel("Key authenticated. Choose a location to save the private key file.")
+        desc.setWordWrap(True)
+        desc.setStyleSheet(
+            f"font-size: 12px; color: {Colors.TEXT_SECONDARY}; background: transparent;"
+        )
+        layout.addWidget(desc)
+
         self._status_label = QLabel()
         self._status_label.setWordWrap(True)
         self._status_label.setStyleSheet(
@@ -203,20 +210,34 @@ class PrivateKeyExportDialog(QDialog):
             self._show_error("Enter the master password.")
             return
 
-        if not self._store.unlock(entered):
+        try:
+            unlocked = self._store.unlock(entered)
+        except Exception:
+            logger.exception("Exception during unlock() in PrivateKeyExportDialog")
+            self._show_error("Internal error — check logs.")
+            return
+
+        if not unlocked:
             self._show_error("Incorrect master password.")
             self._master_pwd_edit.clear()
             self._master_pwd_edit.setFocus()
             return
 
         self._master_pwd_edit.clear()
-        self._pem = self._keychain.export_private_key(self._key.id)
+
+        try:
+            self._pem = self._keychain.export_private_key(self._key.id)
+        except Exception:
+            logger.exception("Exception during export_private_key(%d)", self._key.id)
+            self._show_error("Could not decrypt the key — check logs.")
+            return
 
         if self._pem is None:
             self._show_error("Could not read the key — no data found.")
             return
 
         self._stack.setCurrentIndex(1)
+        self._save_to_file()
 
     def _show_error(self, msg: str) -> None:
         self._error_label.setText(msg)
