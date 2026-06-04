@@ -53,7 +53,7 @@ class PrivateKeyExportDialog(QDialog):
         self._key = key
         self._pem: bytes | None = None
 
-        self.setWindowTitle("Eksportuj klucz prywatny")
+        self.setWindowTitle("Export Private Key")
         self.setFixedSize(440, 320)
         self.setModal(True)
 
@@ -79,17 +79,17 @@ class PrivateKeyExportDialog(QDialog):
 
         layout.addWidget(self._context_header())
 
-        desc = QLabel("Podaj hasło główne, aby wyeksportować klucz prywatny.")
+        desc = QLabel("Enter the master password to export the private key.")
         desc.setWordWrap(True)
         desc.setStyleSheet(
             f"font-size: 12px; color: {Colors.TEXT_SECONDARY}; background: transparent;"
         )
         layout.addWidget(desc)
 
-        layout.addWidget(self._field_label("Hasło główne"))
+        layout.addWidget(self._field_label("Master Password"))
         self._master_pwd_edit = QLineEdit()
         self._master_pwd_edit.setEchoMode(QLineEdit.EchoMode.Password)
-        self._master_pwd_edit.setPlaceholderText("Wprowadź hasło główne")
+        self._master_pwd_edit.setPlaceholderText("Enter master password")
         self._master_pwd_edit.returnPressed.connect(self._confirm)
         layout.addWidget(self._master_pwd_edit)
 
@@ -104,11 +104,11 @@ class PrivateKeyExportDialog(QDialog):
 
         btn_row = QHBoxLayout()
         btn_row.addStretch()
-        cancel_btn = QPushButton("Anuluj")
+        cancel_btn = QPushButton("Cancel")
         cancel_btn.setObjectName("cancelBtn")
         cancel_btn.clicked.connect(self.reject)
         btn_row.addWidget(cancel_btn)
-        confirm_btn = QPushButton("Potwierdź")
+        confirm_btn = QPushButton("Confirm")
         confirm_btn.setObjectName("primaryBtn")
         confirm_btn.setDefault(True)
         confirm_btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -142,12 +142,12 @@ class PrivateKeyExportDialog(QDialog):
 
         btn_row = QHBoxLayout()
         btn_row.addStretch()
-        close_btn = QPushButton("Zamknij")
+        close_btn = QPushButton("Close")
         close_btn.setObjectName("cancelBtn")
         close_btn.clicked.connect(self.accept)
         btn_row.addWidget(close_btn)
 
-        self._save_btn = QPushButton("Zapisz do pliku")
+        self._save_btn = QPushButton("Save to File")
         self._save_btn.setObjectName("primaryBtn")
         self._save_btn.setDefault(True)
         self._save_btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -200,11 +200,11 @@ class PrivateKeyExportDialog(QDialog):
     def _confirm(self) -> None:
         entered = self._master_pwd_edit.text()
         if not entered:
-            self._show_error("Podaj hasło główne.")
+            self._show_error("Enter the master password.")
             return
 
         if not self._store.unlock(entered):
-            self._show_error("Nieprawidłowe hasło główne.")
+            self._show_error("Incorrect master password.")
             self._master_pwd_edit.clear()
             self._master_pwd_edit.setFocus()
             return
@@ -213,7 +213,7 @@ class PrivateKeyExportDialog(QDialog):
         self._pem = self._keychain.export_private_key(self._key.id)
 
         if self._pem is None:
-            self._show_error("Nie można odczytać klucza — brak danych.")
+            self._show_error("Could not read the key — no data found.")
             return
 
         self._stack.setCurrentIndex(1)
@@ -229,7 +229,7 @@ class PrivateKeyExportDialog(QDialog):
         default_name = _DEFAULT_NAMES.get(self._key.key_type, "id_key")
         file_path, _ = QFileDialog.getSaveFileName(
             self,
-            "Eksportuj klucz prywatny",
+            "Export Private Key",
             default_name,
             "All Files (*)",
         )
@@ -243,7 +243,7 @@ class PrivateKeyExportDialog(QDialog):
                 os.chmod(file_path, 0o600)
             except OSError:
                 pass
-            self._status_label.setText(f"Zapisano: {file_path}")
+            self._status_label.setText(f"Saved: {file_path}")
             self._status_label.setStyleSheet(
                 f"font-size: 12px; color: {Colors.SUCCESS}; background: transparent;"
             )
@@ -254,8 +254,8 @@ class PrivateKeyExportDialog(QDialog):
             logger.exception("Failed to export private key %d to %s", self._key.id, file_path)
             QMessageBox.warning(
                 self,
-                "Błąd zapisu",
-                f"Nie można zapisać klucza:\n{exc}",
+                "Export Failed",
+                f"Could not save the key:\n{exc}",
             )
 
     def done(self, result: int) -> None:
