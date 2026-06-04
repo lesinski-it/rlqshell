@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
 )
 
 from rlqshell.app.constants import Colors
+from rlqshell.core.credential_store import CredentialStore
 from rlqshell.core.keychain import Keychain
 from rlqshell.core.models.ssh_key import SSHKey
 from rlqshell.ui.widgets.empty_state import EmptyState
@@ -194,9 +195,16 @@ class GenerateKeyDialog(QDialog):
 class KeychainView(QWidget):
     """SSH key management view — list, generate, import, export, delete."""
 
-    def __init__(self, keychain: Keychain, vault_locked: bool = False, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        keychain: Keychain,
+        credential_store: CredentialStore | None = None,
+        vault_locked: bool = False,
+        parent: QWidget | None = None,
+    ) -> None:
         super().__init__(parent)
         self._keychain = keychain
+        self._credential_store = credential_store
         self._vault_locked = vault_locked
 
         layout = QVBoxLayout(self)
@@ -342,6 +350,10 @@ class KeychainView(QWidget):
         export_pub = menu.addAction("Export Public Key")
         export_pub.triggered.connect(lambda: self._export_public_key(key_id))
 
+        if self._credential_store is not None:
+            export_priv = menu.addAction("Export Private Key")
+            export_priv.triggered.connect(lambda: self._export_private_key(key_id))
+
         menu.addSeparator()
 
         delete_action = menu.addAction("Delete")
@@ -372,6 +384,15 @@ class KeychainView(QWidget):
             with open(file_path, "w", encoding="utf-8") as f:
                 f.write(pub)
             logger.info("Public key exported to %s", file_path)
+
+    def _export_private_key(self, key_id: int) -> None:
+        key = next((k for k in self._keychain.list_keys() if k.id == key_id), None)
+        if key is None:
+            return
+        from rlqshell.ui.vault.private_key_export_dialog import PrivateKeyExportDialog
+
+        dlg = PrivateKeyExportDialog(self._credential_store, self._keychain, key, parent=self)
+        dlg.exec()
 
     def _delete_key(self, key_id: int) -> None:
         from PySide6.QtWidgets import QMessageBox
