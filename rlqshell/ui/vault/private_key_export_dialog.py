@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
@@ -208,8 +209,8 @@ class PrivateKeyExportDialog(QDialog):
             self._master_pwd_edit.setFocus()
             return
 
-        self._pem = self._keychain.export_private_key(self._key.id)
         self._master_pwd_edit.clear()
+        self._pem = self._keychain.export_private_key(self._key.id)
 
         if self._pem is None:
             self._show_error("Nie można odczytać klucza — brak danych.")
@@ -238,6 +239,10 @@ class PrivateKeyExportDialog(QDialog):
         try:
             with open(file_path, "wb") as f:
                 f.write(self._pem)
+            try:
+                os.chmod(file_path, 0o600)
+            except OSError:
+                pass
             self._status_label.setText(f"Zapisano: {file_path}")
             self._status_label.setStyleSheet(
                 f"font-size: 12px; color: {Colors.SUCCESS}; background: transparent;"
@@ -246,6 +251,7 @@ class PrivateKeyExportDialog(QDialog):
             self._save_btn.setEnabled(False)
             logger.info("Private key %d exported to %s", self._key.id, file_path)
         except Exception as exc:
+            logger.exception("Failed to export private key %d to %s", self._key.id, file_path)
             QMessageBox.warning(
                 self,
                 "Błąd zapisu",
