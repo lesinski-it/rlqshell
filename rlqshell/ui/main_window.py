@@ -13,9 +13,11 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QMainWindow,
+    QMenu,
     QMessageBox,
     QPushButton,
     QStackedWidget,
+    QSystemTrayIcon,
     QVBoxLayout,
     QWidget,
 )
@@ -135,6 +137,7 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(central)
 
         logger.info("MainWindow created with TopBar navigation")
+        self._tray_icon: QSystemTrayIcon | None = None
 
     @property
     def top_bar(self) -> TopBar:
@@ -227,6 +230,8 @@ class MainWindow(QMainWindow):
     def set_config(self, config: ConfigManager) -> None:
         """Set the config manager for persistent settings."""
         self._config = config
+        if config.get("general.close_to_tray", False):
+            self._ensure_tray_icon()
         # Follow OS color scheme changes when appearance.theme is "auto".
         from PySide6.QtGui import QGuiApplication
 
@@ -249,9 +254,70 @@ class MainWindow(QMainWindow):
         """Register a callback to run on window close for resource cleanup."""
         self._cleanup_callback = callback
 
+    def _ensure_tray_icon(self) -> None:
+        """Create and show the system tray icon if it doesn't exist yet."""
+        if self._tray_icon is not None:
+            return
+
+        tray = QSystemTrayIcon(self.windowIcon(), self)
+
+        menu = QMenu(self)
+        show_action = menu.addAction("Show RLQShell")
+        show_action.triggered.connect(self._restore_from_tray)
+        menu.addSeparator()
+        quit_action = menu.addAction("Quit")
+        quit_action.triggered.connect(self._quit)
+
+        tray.setContextMenu(menu)
+        tray.activated.connect(self._on_tray_activated)
+        tray.show()
+
+        QApplication.instance().setQuitOnLastWindowClosed(False)
+        self._tray_icon = tray
+
+    def _restore_from_tray(self) -> None:
+        """Bring the window back from the tray."""
+        self.show()
+        self.raise_()
+        self.activateWindow()
+
+    def _on_tray_activated(self, reason: QSystemTrayIcon.ActivationReason) -> None:
+        if reason == QSystemTrayIcon.ActivationReason.DoubleClick:
+            self._restore_from_tray()
+
+    def _quit(self) -> None:
+        """Schedule async cleanup then quit the application."""
+        self.hide()
+        logger.info("MainWindow closing")
+
+        async def _run_cleanup_and_quit() -> None:
+            if hasattr(self, "_cleanup_callback") and self._cleanup_callback:
+                try:
+                    result = self._cleanup_callback()
+                    if asyncio.iscoroutine(result):
+                        await result
+                except Exception:
+                    logger.exception("Error during cleanup")
+            QApplication.instance().quit()
+
+        asyncio.ensure_future(_run_cleanup_and_quit())
+
     def closeEvent(self, event) -> None:
-        """Handle window close — confirm, then run cleanup callback."""
+        """Handle window close — confirm, then either quit or minimize to tray."""
         config = getattr(self, "_config", None)
+
+        close_to_tray = config.get("general.close_to_tray", False) if config else False
+        if close_to_tray:
+            event.ignore()
+            self.hide()
+            self._ensure_tray_icon()
+            return
+
+        # Feature disabled — clean up any tray icon from previous session in this run
+        if self._tray_icon is not None:
+            self._tray_icon.hide()
+            self._tray_icon = None
+
         confirm = config.get("general.confirm_close_app", True) if config else True
 
         if confirm:
@@ -273,19 +339,5 @@ class MainWindow(QMainWindow):
                 event.ignore()
                 return
 
-        # Ignore the event now — we'll call QApplication.quit() after async cleanup.
         event.ignore()
-        self.hide()
-        logger.info("MainWindow closing")
-
-        async def _run_cleanup_and_quit() -> None:
-            if hasattr(self, "_cleanup_callback") and self._cleanup_callback:
-                try:
-                    result = self._cleanup_callback()
-                    if asyncio.iscoroutine(result):
-                        await result
-                except Exception:
-                    logger.exception("Error during cleanup")
-            QApplication.instance().quit()
-
-        asyncio.ensure_future(_run_cleanup_and_quit())
+        self._quit()
