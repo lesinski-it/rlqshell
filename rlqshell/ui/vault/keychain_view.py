@@ -388,6 +388,7 @@ class KeychainView(QWidget):
     def _export_private_key(self, key_id: int) -> None:
         key = next((k for k in self._keychain.list_keys() if k.id == key_id), None)
         if key is None:
+            logger.warning("Key %d not found for private key export", key_id)
             return
         from rlqshell.ui.vault.private_key_export_dialog import PrivateKeyExportDialog
 

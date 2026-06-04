@@ -120,7 +120,9 @@ class VaultPage(QWidget):
         # Keychain view (real widget if keychain provided)
         if keychain is not None:
             self._keychain_section: QWidget = KeychainView(
-                keychain, vault_locked=self._vault_locked
+                keychain,
+                credential_store=credential_store,
+                vault_locked=self._vault_locked,
             )
         else:
             self._keychain_section = _PlaceholderSection("Keychain")
