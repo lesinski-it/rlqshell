@@ -62,6 +62,27 @@ class GeneralSettings(QWidget):
         form.addRow(self._make_label("Confirm on tab close"), self._confirm_tab)
 
         layout.addLayout(form)
+
+        # --- Window behavior section ---
+        wb_label = QLabel("Window Behavior")
+        wb_label.setStyleSheet(
+            f"font-size: 14px; font-weight: 600; color: {Colors.TEXT_PRIMARY}; "
+            f"background: transparent; margin-top: 8px;"
+        )
+        layout.addWidget(wb_label)
+
+        wb_form = QFormLayout()
+        wb_form.setSpacing(12)
+        wb_form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
+
+        self._close_to_tray = ToggleSwitch()
+        self._close_to_tray.set_checked(config.get("general.close_to_tray", False))
+        self._close_to_tray.toggled.connect(
+            lambda v: self._save("general.close_to_tray", v)
+        )
+        wb_form.addRow(self._make_label("Minimize to tray on close"), self._close_to_tray)
+
+        layout.addLayout(wb_form)
         layout.addStretch()
 
     def _make_label(self, text: str) -> QLabel:
